@@ -1,9 +1,10 @@
 import { useEffect, useRef } from "react";
 import {
-  applyZoomToNDC,
+  applyViewTransformToNDC,
   ndcToPixel,
   projectDirectionToNDC,
   projectToNDC,
+  type CameraPan,
   type Orientation,
   type Vector3,
   type ViewMode,
@@ -61,7 +62,8 @@ export function useWebGPURenderer(
   canvasRef: React.RefObject<HTMLCanvasElement | null>,
   agents: Agent[],
   viewMode: ViewMode,
-  zoom: number
+  zoom: number,
+  cameraPan: CameraPan
 ) {
   const gpuRef = useRef<{
     device: GPUDevice;
@@ -83,7 +85,8 @@ export function useWebGPURenderer(
   const render2DFallback = (
     canvas: HTMLCanvasElement,
     currentAgents: Agent[],
-    currentViewMode: ViewMode
+    currentViewMode: ViewMode,
+    currentCameraPan: CameraPan
   ) => {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
@@ -97,7 +100,7 @@ export function useWebGPURenderer(
 
     for (const agent of currentAgents) {
       const [nx, ny] = projectToNDC(agent.position, currentViewMode);
-      const [znx, zny] = applyZoomToNDC(nx, ny, zoom);
+      const [znx, zny] = applyViewTransformToNDC(nx, ny, zoom, currentCameraPan);
       const [px, py] = ndcToPixel(znx, zny, width, height);
       const [dx, dy] = projectDirectionToNDC(
         agent.position,
@@ -230,7 +233,7 @@ export function useWebGPURenderer(
       const currentAgents = agentsRef.current;
 
       if (canvas && !gpu) {
-        render2DFallback(canvas, currentAgents, viewMode);
+        render2DFallback(canvas, currentAgents, viewMode, cameraPan);
       }
 
       if (gpu && canvas) {
@@ -250,7 +253,7 @@ export function useWebGPURenderer(
 
           for (let i = 0; i < currentAgents.length; i++) {
             const [nx, ny] = projectToNDC(currentAgents[i].position, viewMode);
-            const [znx, zny] = applyZoomToNDC(nx, ny, zoom);
+            const [znx, zny] = applyViewTransformToNDC(nx, ny, zoom, cameraPan);
             const [dx, dy] = projectDirectionToNDC(
               currentAgents[i].position,
               currentAgents[i].orientation,
@@ -318,5 +321,5 @@ export function useWebGPURenderer(
 
     rafId = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(rafId);
-  }, [canvasRef, viewMode, zoom]);
+  }, [canvasRef, viewMode, zoom, cameraPan]);
 }

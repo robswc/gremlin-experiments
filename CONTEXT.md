@@ -22,7 +22,7 @@ Responsibilities:
 - own simulation truth state
 - tick simulation at fixed cadence
 - stream state over SSE (`/events`)
-- expose control endpoints (`/reset`)
+- expose control endpoints (`/reset`, `/move-to`, `/agent-behavior`)
 
 ### Frontend (Vite + React)
 - Path: `vite-app/`
@@ -51,13 +51,36 @@ Current serialized agent fields include:
 - `friendly: boolean`
 - `enemy: boolean`
 - `behavior: string`
+- `movementMode: string`
 - `followId?: string`
 - `position: { x, y, z }`
 - `orientation: { pitch, yaw, roll }`
+- `velocity: { x, y, z }`
+- `moveGoal?: { x, y, z }`
+- `activeObjective?: { id, kind, target, priority, createdTick }`
+- `objectives?: Objective[]`
+
+### Physical Object Data
+Current serialized object fields include:
+- `id: string`
+- `kind: "square"` (current primitive)
+- `position: { x, y, z }`
+- `size: number` (X/Z extent)
+- `height: number` (Y extent)
 
 ### Behaviors
 - `orbit`: circles around an orbit center
 - `tail`: follows behind target (`followId`) with delayed correction updates
+- `move_to`: follows a planned waypoint path to a target
+- no behavior (`""`): holds stationary
+
+### Objective Stack (Priority Arbitration)
+- Objectives are stored per-agent in a heap-backed queue.
+- Current objective kinds:
+  - `self_preservation` (priority `0`, highest)
+  - `follow_instruction` (priority `10`)
+- `self_preservation` can preempt `follow_instruction` when safety bounds are violated.
+- Interrupted instruction objectives are re-queued so they resume after safety resolution.
 
 Important tail dynamics:
 - translational speed is constant (no slowdown near goal)
@@ -74,11 +97,19 @@ This combination is key for smoothness and stability across jitter.
 
 ### SSE Stream
 - Endpoint: `GET /events`
-- Data: per-tick JSON snapshots (`tick`, `agents`)
+- Data: per-tick JSON snapshots (`tick`, `agents`, `objects`)
 
 ### Reset
 - Endpoint: `POST /reset`
 - Resets simulation tick and all agents to initial state
+
+### Move Command
+- Endpoint: `POST /move-to`
+- Queues a `follow_instruction` movement objective for an agent.
+
+### Behavior Command
+- Endpoint: `POST /agent-behavior`
+- Sets behavior to `stationary` or `orbit`.
 
 ## Rendering Model (Layered Canvases)
 In `App.tsx`, rendering is intentionally split into layers:
@@ -115,6 +146,11 @@ Current behavior:
 - approximately `0.4x` to `3.0x`
 
 If adding new overlays, pass `zoom` into those hooks too.
+
+## Camera Pan
+- Camera pan is represented as an NDC offset and applied together with zoom.
+- Pan controls include drag-to-pan, keyboard arrows, and button nudges.
+- All render layers must consume the same view transform helper to stay aligned.
 
 ## Color Conventions
 - Friendly agent: cyan
@@ -154,6 +190,20 @@ This should remain optional/toggleable for debugging.
 
 5. Maintain projection single source of truth
 - Do not duplicate projection math inside each renderer.
+
+6. Objective queue integrity
+- Do not clear queued objectives when a `move_to` finishes.
+- Only clear objective queues on explicit behavior resets (e.g. switching to orbit/stationary).
+
+7. Collision semantics
+- Physical object collision is currently axis-aligned box collision (X/Z size + Y height).
+- Collision currently destroys the agent (removes it from `Sandbox.Agents`).
+
+## Session Learnings
+- `move_to` is now instruction-driven via objective queue, not an immediate behavior overwrite.
+- Priority stack currently models "safety first": `self_preservation` over `follow_instruction`.
+- Rendering is now multi-layer with shared camera transform (`zoom + pan`) for alignment.
+- Physical object support exists and is streamed/rendered; seeded obstacle is at `(32, 0, 32)` with `size=32` and `height=32`.
 
 ## Running the Project
 From repo root, run in separate terminals:

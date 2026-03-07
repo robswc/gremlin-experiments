@@ -1,8 +1,9 @@
 import { useEffect } from "react";
 import {
-  applyZoomToNDC,
+  applyViewTransformToNDC,
   ndcToPixel,
   projectToNDC,
+  type CameraPan,
   type Vector3,
   type ViewMode,
 } from "@/lib/projection";
@@ -19,7 +20,8 @@ export function useTailLinkRenderer(
   agents: Agent[],
   viewMode: ViewMode,
   enabled: boolean,
-  zoom: number
+  zoom: number,
+  cameraPan: CameraPan
 ) {
   useEffect(() => {
     let rafId = 0;
@@ -54,8 +56,8 @@ export function useTailLinkRenderer(
 
             const [axNdcX, axNdcY] = projectToNDC(a.position, viewMode);
             const [txNdcX, txNdcY] = projectToNDC(target.position, viewMode);
-            const [zax, zay] = applyZoomToNDC(axNdcX, axNdcY, zoom);
-            const [ztx, zty] = applyZoomToNDC(txNdcX, txNdcY, zoom);
+            const [zax, zay] = applyViewTransformToNDC(axNdcX, axNdcY, zoom, cameraPan);
+            const [ztx, zty] = applyViewTransformToNDC(txNdcX, txNdcY, zoom, cameraPan);
             const [ax, ay] = ndcToPixel(zax, zay, width, height);
             const [tx, ty] = ndcToPixel(ztx, zty, width, height);
 
@@ -72,5 +74,5 @@ export function useTailLinkRenderer(
 
     rafId = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(rafId);
-  }, [canvasRef, agents, viewMode, enabled, zoom]);
+  }, [canvasRef, agents, viewMode, enabled, zoom, cameraPan]);
 }

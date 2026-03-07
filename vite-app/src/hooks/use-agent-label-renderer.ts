@@ -1,8 +1,9 @@
 import { useEffect } from "react";
 import {
-  applyZoomToNDC,
+  applyViewTransformToNDC,
   ndcToPixel,
   projectToNDC,
+  type CameraPan,
   type Vector3,
   type ViewMode,
 } from "@/lib/projection";
@@ -16,7 +17,9 @@ export function useAgentLabelRenderer(
   canvasRef: React.RefObject<HTMLCanvasElement | null>,
   agents: Agent[],
   viewMode: ViewMode,
-  zoom: number
+  zoom: number,
+  cameraPan: CameraPan,
+  showCoordinateLabels: boolean
 ) {
   useEffect(() => {
     let rafId = 0;
@@ -63,8 +66,34 @@ export function useAgentLabelRenderer(
           const boxMidY = boxY + boxHeight / 2;
 
           const [axNdcX, axNdcY] = projectToNDC(agent.position, viewMode);
-          const [zax, zay] = applyZoomToNDC(axNdcX, axNdcY, zoom);
+          const [zax, zay] = applyViewTransformToNDC(axNdcX, axNdcY, zoom, cameraPan);
           const [ax, ay] = ndcToPixel(zax, zay, width, height);
+
+          if (showCoordinateLabels) {
+            // Per-agent world position label near the marker (above-right).
+            const coordText = `${agent.position.x.toFixed(2)}, ${agent.position.y.toFixed(2)}, ${agent.position.z.toFixed(2)}`;
+            const coordOffsetX = 10 * dpr;
+            const coordOffsetY = 14 * dpr;
+            const coordPaddingX = 5 * dpr;
+            const coordPaddingY = 3 * dpr;
+            const coordTextWidth = ctx.measureText(coordText).width;
+            const coordBoxX = ax + coordOffsetX;
+            const coordBoxY = ay - coordOffsetY - fontSize - coordPaddingY * 2;
+            const coordBoxWidth = coordTextWidth + coordPaddingX * 2;
+            const coordBoxHeight = fontSize + coordPaddingY * 2;
+
+            ctx.fillStyle = "rgba(0, 0, 0, 0.62)";
+            ctx.fillRect(coordBoxX, coordBoxY, coordBoxWidth, coordBoxHeight);
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.38)";
+            ctx.lineWidth = Math.max(1, 1 * dpr);
+            ctx.strokeRect(coordBoxX, coordBoxY, coordBoxWidth, coordBoxHeight);
+            ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+            ctx.fillText(
+              coordText,
+              coordBoxX + coordPaddingX,
+              coordBoxY + coordBoxHeight / 2
+            );
+          }
 
           // 33% white connector to label anchor.
           ctx.strokeStyle = "rgba(255, 255, 255, 0.33)";
@@ -92,5 +121,5 @@ export function useAgentLabelRenderer(
 
     rafId = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(rafId);
-  }, [canvasRef, agents, viewMode, zoom]);
+  }, [canvasRef, agents, viewMode, zoom, cameraPan, showCoordinateLabels]);
 }

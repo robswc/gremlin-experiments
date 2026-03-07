@@ -1,13 +1,14 @@
 import { useEffect } from "react";
 import {
   WORLD_HALF_EXTENT,
-  applyZoomToNDC,
+  applyViewTransformToNDC,
   projectFloorToNDC,
   ndcToPixel,
+  type CameraPan,
   type ViewMode,
 } from "@/lib/projection";
 
-const GRID_HALF_EXTENT = WORLD_HALF_EXTENT * 12;
+const GRID_HALF_EXTENT = WORLD_HALF_EXTENT * 2;
 const MAJOR_INTERVAL = 10;
 
 function drawFloorGrid(
@@ -15,7 +16,8 @@ function drawFloorGrid(
   width: number,
   height: number,
   viewMode: ViewMode,
-  zoom: number
+  zoom: number,
+  cameraPan: CameraPan
 ) {
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, width, height);
@@ -28,8 +30,8 @@ function drawFloorGrid(
     b: [number, number],
     major: boolean
   ) => {
-    const [azx, azy] = applyZoomToNDC(a[0], a[1], zoom);
-    const [bzx, bzy] = applyZoomToNDC(b[0], b[1], zoom);
+    const [azx, azy] = applyViewTransformToNDC(a[0], a[1], zoom, cameraPan);
+    const [bzx, bzy] = applyViewTransformToNDC(b[0], b[1], zoom, cameraPan);
     const [ax, ay] = ndcToPixel(azx, azy, width, height);
     const [bx, by] = ndcToPixel(bzx, bzy, width, height);
 
@@ -59,7 +61,8 @@ function drawFloorGrid(
 export function useFloorGridRenderer(
   canvasRef: React.RefObject<HTMLCanvasElement | null>,
   viewMode: ViewMode,
-  zoom: number
+  zoom: number,
+  cameraPan: CameraPan
 ) {
   useEffect(() => {
     let rafId = 0;
@@ -80,7 +83,7 @@ export function useFloorGridRenderer(
       const width = canvas.width;
       const height = canvas.height;
       if (width > 0 && height > 0) {
-        drawFloorGrid(ctx, width, height, viewMode, zoom);
+        drawFloorGrid(ctx, width, height, viewMode, zoom, cameraPan);
       }
 
       rafId = requestAnimationFrame(frame);
@@ -88,5 +91,5 @@ export function useFloorGridRenderer(
 
     rafId = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(rafId);
-  }, [canvasRef, viewMode, zoom]);
+  }, [canvasRef, viewMode, zoom, cameraPan]);
 }

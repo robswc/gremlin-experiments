@@ -6,6 +6,23 @@ interface Vector3 {
   z: number;
 }
 
+interface MoveObjective {
+  id: number;
+  kind: string;
+  target: Vector3;
+  priority: number;
+  createdTick: number;
+}
+
+interface PhysicalObject {
+  id: string;
+  kind: string;
+  position: Vector3;
+  size: number;
+  height: number;
+  radius?: number;
+}
+
 interface Orientation {
   pitch: number;
   yaw: number;
@@ -17,14 +34,20 @@ interface Agent {
   friendly: boolean;
   enemy: boolean;
   behavior: string;
+  movementMode: string;
   followId?: string;
   position: Vector3;
   orientation: Orientation;
+  velocity: Vector3;
+  moveGoal?: Vector3;
+  activeObjective?: MoveObjective;
+  objectives?: MoveObjective[];
 }
 
 interface SandboxState {
   tick: number;
   agents: Agent[];
+  objects: PhysicalObject[];
 }
 
 interface UseSimulationOptions {
@@ -34,14 +57,41 @@ interface UseSimulationOptions {
 function cloneState(state: SandboxState): SandboxState {
   return {
     tick: state.tick,
+    objects: state.objects.map((o) => ({
+      id: o.id,
+      kind: o.kind,
+      position: { ...o.position },
+      size: o.size,
+      height: o.height,
+      radius: o.radius,
+    })),
     agents: state.agents.map((a) => ({
       id: a.id,
       friendly: a.friendly,
       enemy: a.enemy,
       behavior: a.behavior,
+      movementMode: a.movementMode,
       followId: a.followId,
       position: { ...a.position },
       orientation: { ...a.orientation },
+      velocity: { ...a.velocity },
+      moveGoal: a.moveGoal ? { ...a.moveGoal } : undefined,
+      activeObjective: a.activeObjective
+        ? {
+            id: a.activeObjective.id,
+            kind: a.activeObjective.kind,
+            target: { ...a.activeObjective.target },
+            priority: a.activeObjective.priority,
+            createdTick: a.activeObjective.createdTick,
+          }
+        : undefined,
+      objectives: a.objectives?.map((o) => ({
+        id: o.id,
+        kind: o.kind,
+        target: { ...o.target },
+        priority: o.priority,
+        createdTick: o.createdTick,
+      })),
     })),
   };
 }
@@ -74,6 +124,7 @@ function interpolateState(current: SandboxState, target: SandboxState, t: number
       friendly: a.friendly,
       enemy: a.enemy,
       behavior: a.behavior,
+      movementMode: a.movementMode,
       followId: a.followId,
       position: {
         x: lerp(a.position.x, ta.position.x, t),
@@ -85,10 +136,43 @@ function interpolateState(current: SandboxState, target: SandboxState, t: number
         yaw: lerpAngle(a.orientation.yaw, ta.orientation.yaw, t),
         roll: lerpAngle(a.orientation.roll, ta.orientation.roll, t),
       },
+      velocity: {
+        x: lerp(a.velocity.x, ta.velocity.x, t),
+        y: lerp(a.velocity.y, ta.velocity.y, t),
+        z: lerp(a.velocity.z, ta.velocity.z, t),
+      },
+      moveGoal: ta.moveGoal ? { ...ta.moveGoal } : undefined,
+      activeObjective: ta.activeObjective
+        ? {
+            id: ta.activeObjective.id,
+            kind: ta.activeObjective.kind,
+            target: { ...ta.activeObjective.target },
+            priority: ta.activeObjective.priority,
+            createdTick: ta.activeObjective.createdTick,
+          }
+        : undefined,
+      objectives: ta.objectives?.map((o) => ({
+        id: o.id,
+        kind: o.kind,
+        target: { ...o.target },
+        priority: o.priority,
+        createdTick: o.createdTick,
+      })),
     };
   });
 
-  return { tick: target.tick, agents };
+  return {
+    tick: target.tick,
+    objects: target.objects.map((o) => ({
+      id: o.id,
+      kind: o.kind,
+      position: { ...o.position },
+      size: o.size,
+      height: o.height,
+      radius: o.radius,
+    })),
+    agents,
+  };
 }
 
 export function useSimulation(url: string, options?: UseSimulationOptions) {

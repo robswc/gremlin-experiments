@@ -12,10 +12,15 @@ export interface Orientation {
   roll: number;
 }
 
-export const WORLD_HALF_EXTENT = 10;
-export const FLOOR_Y = -WORLD_HALF_EXTENT;
+export interface CameraPan {
+  x: number;
+  y: number;
+}
 
-export function projectToNDC(pos: Vector3, viewMode: ViewMode): [number, number] {
+export const WORLD_HALF_EXTENT = 64;
+export const FLOOR_Y = 0;
+
+function projectToNDCInternal(pos: Vector3, viewMode: ViewMode): [number, number] {
   switch (viewMode) {
     case "front":
       return [pos.x / WORLD_HALF_EXTENT, pos.y / WORLD_HALF_EXTENT];
@@ -32,6 +37,15 @@ export function projectToNDC(pos: Vector3, viewMode: ViewMode): [number, number]
   }
 }
 
+export function projectToNDC(pos: Vector3, viewMode: ViewMode): [number, number] {
+  return projectToNDCInternal(pos, viewMode);
+}
+
+export function projectToNDCClampedToFloor(pos: Vector3, viewMode: ViewMode): [number, number] {
+  const clipped = pos.y >= FLOOR_Y ? pos : { x: pos.x, y: FLOOR_Y, z: pos.z };
+  return projectToNDCInternal(clipped, viewMode);
+}
+
 export function projectFloorToNDC(x: number, z: number, viewMode: ViewMode): [number, number] {
   return projectToNDC({ x, y: FLOOR_Y, z }, viewMode);
 }
@@ -44,6 +58,15 @@ export function ndcToPixel(nx: number, ny: number, width: number, height: number
 
 export function applyZoomToNDC(nx: number, ny: number, zoom: number): [number, number] {
   return [nx * zoom, ny * zoom];
+}
+
+export function applyViewTransformToNDC(
+  nx: number,
+  ny: number,
+  zoom: number,
+  pan: CameraPan
+): [number, number] {
+  return [nx * zoom + pan.x, ny * zoom + pan.y];
 }
 
 export function forwardFromOrientation(o: Orientation): Vector3 {
