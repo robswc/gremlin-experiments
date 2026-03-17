@@ -2,6 +2,7 @@ package simulation
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -14,15 +15,18 @@ type Sandbox struct {
 	Depth       float64                `json:"depth"`  // Z extent
 	Agents      []*Agent               `json:"agents"`
 	Objects     []*PhysicalObject      `json:"objects"`
+	Roads       []*Road                `json:"roads"`
+	Fleets      []*Fleet               `json:"fleets"`
 	SpawnPoints map[string]*SpawnPoint `json:"spawnPoints"`
 
-	TickRate  time.Duration // how often the simulation ticks
-	StepSize  float64       // retained for compatibility; not used in circular motion
-	tick      uint64
-	mu        sync.RWMutex
-	listeners []chan SandboxState
-	stop      chan struct{}
-	planner   *GridPathPlanner
+	TickRate    time.Duration // how often the simulation ticks
+	StepSize    float64       // retained for compatibility; not used in circular motion
+	tick        uint64
+	mu          sync.RWMutex
+	listeners   []chan SandboxState
+	stop        chan struct{}
+	planner     *GridPathPlanner
+	nextFleetID uint64
 }
 
 // SandboxState is a snapshot sent to listeners each tick.
@@ -30,6 +34,8 @@ type SandboxState struct {
 	Tick    uint64            `json:"tick"`
 	Agents  []*Agent          `json:"agents"`
 	Objects []*PhysicalObject `json:"objects"`
+	Roads   []*Road           `json:"roads"`
+	Fleets  []*Fleet          `json:"fleets"`
 }
 
 // NewSandbox creates a sandbox with given dimensions.
@@ -40,6 +46,8 @@ func NewSandbox(width, height, depth float64) *Sandbox {
 		Depth:       depth,
 		Agents:      make([]*Agent, 0),
 		Objects:     make([]*PhysicalObject, 0),
+		Roads:       make([]*Road, 0),
+		Fleets:      make([]*Fleet, 0),
 		SpawnPoints: make(map[string]*SpawnPoint),
 		TickRate:    16 * time.Millisecond,
 		StepSize:    0.5,
@@ -111,6 +119,17 @@ func (s *Sandbox) AddObject(o *PhysicalObject) {
 	s.Objects = append(s.Objects, o)
 }
 
+// AddRoad adds a static road path to the sandbox.
+func (s *Sandbox) AddRoad(r *Road) {
+	if r == nil {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Roads = append(s.Roads, r)
+}
+
 // Subscribe returns a channel that receives state snapshots each tick.
 func (s *Sandbox) Subscribe() chan SandboxState {
 	ch := make(chan SandboxState, 1)
@@ -156,6 +175,7 @@ func (s *Sandbox) Run() {
 				agentsByID[a.ID] = a
 				s.applyObjectiveStackPolicy(a)
 			}
+			s.syncFleetFollowerBehaviorLocked(agentsByID)
 
 			// 1) Update orbiters first, so tails read current target state.
 			for _, a := range s.Agents {
@@ -164,7 +184,22 @@ func (s *Sandbox) Run() {
 				}
 			}
 
-			// 2) Update tailers using (possibly updated) target transforms.
+			// 2) Update explicit move commands.
+			for _, a := range s.Agents {
+				if a.Behavior == "move_to" {
+					a.StepMoveTo(deltaSeconds)
+				}
+			}
+
+			// 3) Update fleet followers using current target transforms.
+			for _, a := range s.Agents {
+				if a.Behavior == "follow" {
+					target := agentsByID[a.FollowID]
+					a.StepFollow(target, deltaSeconds)
+				}
+			}
+
+			// 4) Update tailers using (possibly updated) target transforms.
 			for _, a := range s.Agents {
 				if a.Behavior == "tail" {
 					target := agentsByID[a.FollowID]
@@ -172,26 +207,21 @@ func (s *Sandbox) Run() {
 				}
 			}
 
-			// 3) Update explicit move commands.
-			for _, a := range s.Agents {
-				if a.Behavior == "move_to" {
-					a.StepMoveTo(deltaSeconds)
-				}
-			}
-
-			// 4) Any unknown or empty behavior is held stationary.
+			// 5) Any unknown or empty behavior is held stationary.
 			for _, a := range s.Agents {
 				if a.Behavior == "" && a.HasQueuedObjectives() {
 					s.activateNextObjective(a)
 				}
 
 				switch a.Behavior {
-				case "orbit", "tail", "move_to":
+				case "orbit", "follow", "tail", "move_to":
 					// handled above
 				default:
 					a.HoldStationary()
 				}
 			}
+
+			s.enforceAgentSpacingLocked(1.0)
 
 			s.destroyAgentsCollidingWithObjects()
 
@@ -200,6 +230,8 @@ func (s *Sandbox) Run() {
 				Tick:    s.tick,
 				Agents:  s.Agents,
 				Objects: s.Objects,
+				Roads:   s.Roads,
+				Fleets:  s.Fleets,
 			}
 
 			// Broadcast to listeners (non-blocking)
@@ -212,6 +244,84 @@ func (s *Sandbox) Run() {
 			}
 
 			s.mu.Unlock()
+		}
+	}
+}
+
+func (s *Sandbox) enforceAgentSpacingLocked(minDistance float64) {
+	if len(s.Agents) < 2 || minDistance <= 0 {
+		return
+	}
+
+	minDistSq := minDistance * minDistance
+	for i := 0; i < len(s.Agents); i++ {
+		for j := i + 1; j < len(s.Agents); j++ {
+			a := s.Agents[i]
+			b := s.Agents[j]
+
+			dx := b.Position.X - a.Position.X
+			dy := b.Position.Y - a.Position.Y
+			dz := b.Position.Z - a.Position.Z
+			distSq := dx*dx + dy*dy + dz*dz
+			if distSq >= minDistSq {
+				continue
+			}
+
+			if distSq < 1e-9 {
+				dx = 1
+				dy = 0
+				dz = 0
+				distSq = 1
+			}
+
+			dist := math.Sqrt(distSq)
+			overlap := minDistance - dist
+			if overlap <= 0 {
+				continue
+			}
+
+			nx := dx / dist
+			ny := dy / dist
+			nz := dz / dist
+			correction := overlap * 0.5
+
+			a.Position.X -= nx * correction
+			a.Position.Y -= ny * correction
+			a.Position.Z -= nz * correction
+			b.Position.X += nx * correction
+			b.Position.Y += ny * correction
+			b.Position.Z += nz * correction
+
+			a.Position.X = clamp(a.Position.X, -(s.Width / 2), s.Width/2)
+			a.Position.Y = clamp(a.Position.Y, 0, s.Height)
+			a.Position.Z = clamp(a.Position.Z, -(s.Depth / 2), s.Depth/2)
+			b.Position.X = clamp(b.Position.X, -(s.Width / 2), s.Width/2)
+			b.Position.Y = clamp(b.Position.Y, 0, s.Height)
+			b.Position.Z = clamp(b.Position.Z, -(s.Depth / 2), s.Depth/2)
+		}
+	}
+}
+
+func (s *Sandbox) syncFleetFollowerBehaviorLocked(agentsByID map[string]*Agent) {
+	for _, fleet := range s.Fleets {
+		leader := agentsByID[fleet.LeaderID]
+		if leader == nil {
+			continue
+		}
+
+		for _, memberID := range fleet.AgentIDs {
+			if memberID == fleet.LeaderID {
+				continue
+			}
+			member := agentsByID[memberID]
+			if member == nil {
+				continue
+			}
+
+			member.FollowID = fleet.LeaderID
+			if member.Behavior != "move_to" {
+				member.Behavior = "follow"
+			}
 		}
 	}
 }
@@ -236,6 +346,175 @@ func (s *Sandbox) destroyAgentsCollidingWithObjects() {
 	}
 
 	s.Agents = alive
+	s.reconcileFleetsForCurrentEntitiesLocked()
+}
+
+// UpsertFleet creates or updates a fleet.
+func (s *Sandbox) UpsertFleet(id string, name string, leaderID string, agentIDs []string, objectIDs []string) (*Fleet, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	id = strings.TrimSpace(id)
+	name = strings.TrimSpace(name)
+	leaderID = strings.TrimSpace(leaderID)
+	if name == "" {
+		return nil, fmt.Errorf("fleet name is required")
+	}
+	if leaderID == "" {
+		return nil, fmt.Errorf("leaderId is required")
+	}
+
+	agentIDs = normalizeIDList(agentIDs)
+	objectIDs = normalizeIDList(objectIDs)
+
+	agentSet := make(map[string]struct{}, len(s.Agents))
+	for _, a := range s.Agents {
+		agentSet[a.ID] = struct{}{}
+	}
+
+	if _, exists := agentSet[leaderID]; !exists {
+		return nil, fmt.Errorf("leader agent %q not found", leaderID)
+	}
+
+	for _, agentID := range agentIDs {
+		if _, exists := agentSet[agentID]; !exists {
+			return nil, fmt.Errorf("fleet agent %q not found", agentID)
+		}
+	}
+
+	leaderIncluded := false
+	for _, agentID := range agentIDs {
+		if agentID == leaderID {
+			leaderIncluded = true
+			break
+		}
+	}
+	if !leaderIncluded {
+		agentIDs = append([]string{leaderID}, agentIDs...)
+	}
+
+	objectSet := make(map[string]struct{}, len(s.Objects))
+	for _, object := range s.Objects {
+		objectSet[object.ID] = struct{}{}
+	}
+	for _, objectID := range objectIDs {
+		if _, exists := objectSet[objectID]; !exists {
+			return nil, fmt.Errorf("fleet object %q not found", objectID)
+		}
+	}
+
+	for _, fleet := range s.Fleets {
+		if fleet.LeaderID == leaderID && fleet.ID != id {
+			return nil, fmt.Errorf("leader %q is already assigned to fleet %q", leaderID, fleet.ID)
+		}
+	}
+
+	if id == "" {
+		s.nextFleetID++
+		id = fmt.Sprintf("fleet-%d", s.nextFleetID)
+		fleet := &Fleet{
+			ID:        id,
+			Name:      name,
+			LeaderID:  leaderID,
+			AgentIDs:  agentIDs,
+			ObjectIDs: objectIDs,
+		}
+		s.Fleets = append(s.Fleets, fleet)
+		return fleet, nil
+	}
+
+	for _, fleet := range s.Fleets {
+		if fleet.ID != id {
+			continue
+		}
+		fleet.Name = name
+		fleet.LeaderID = leaderID
+		fleet.AgentIDs = agentIDs
+		fleet.ObjectIDs = objectIDs
+		return fleet, nil
+	}
+
+	fleet := &Fleet{
+		ID:        id,
+		Name:      name,
+		LeaderID:  leaderID,
+		AgentIDs:  agentIDs,
+		ObjectIDs: objectIDs,
+	}
+	s.Fleets = append(s.Fleets, fleet)
+	return fleet, nil
+}
+
+// DeleteFleet removes a fleet by id.
+func (s *Sandbox) DeleteFleet(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("fleet id is required")
+	}
+
+	for i, fleet := range s.Fleets {
+		if fleet.ID != id {
+			continue
+		}
+		s.Fleets = append(s.Fleets[:i], s.Fleets[i+1:]...)
+		return nil
+	}
+
+	return fmt.Errorf("fleet %q not found", id)
+}
+
+func (s *Sandbox) reconcileFleetsForCurrentEntitiesLocked() {
+	if len(s.Fleets) == 0 {
+		return
+	}
+
+	agentSet := make(map[string]struct{}, len(s.Agents))
+	for _, agent := range s.Agents {
+		agentSet[agent.ID] = struct{}{}
+	}
+
+	objectSet := make(map[string]struct{}, len(s.Objects))
+	for _, object := range s.Objects {
+		objectSet[object.ID] = struct{}{}
+	}
+
+	kept := make([]*Fleet, 0, len(s.Fleets))
+	for _, fleet := range s.Fleets {
+		if _, leaderAlive := agentSet[fleet.LeaderID]; !leaderAlive {
+			continue
+		}
+
+		agents := make([]string, 0, len(fleet.AgentIDs))
+		leaderIncluded := false
+		for _, agentID := range fleet.AgentIDs {
+			if _, ok := agentSet[agentID]; !ok {
+				continue
+			}
+			if agentID == fleet.LeaderID {
+				leaderIncluded = true
+			}
+			agents = append(agents, agentID)
+		}
+		if !leaderIncluded {
+			agents = append([]string{fleet.LeaderID}, agents...)
+		}
+
+		objects := make([]string, 0, len(fleet.ObjectIDs))
+		for _, objectID := range fleet.ObjectIDs {
+			if _, ok := objectSet[objectID]; ok {
+				objects = append(objects, objectID)
+			}
+		}
+
+		fleet.AgentIDs = normalizeIDList(agents)
+		fleet.ObjectIDs = normalizeIDList(objects)
+		kept = append(kept, fleet)
+	}
+
+	s.Fleets = kept
 }
 
 // MoveAgentTo computes a path and commands an agent to move to destination.
@@ -247,17 +526,20 @@ func (s *Sandbox) MoveAgentTo(agentID string, destination Vector3) error {
 	for _, a := range s.Agents {
 		if a.ID == agentID {
 			target = a
-			break
 		}
 	}
 	if target == nil {
 		return fmt.Errorf("agent %q not found", agentID)
+	}
+	if s.planner.blocksPoint(destination, s.Objects) {
+		return fmt.Errorf("destination is blocked by a physical object")
 	}
 
 	target.EnqueueInstructionMoveObjective(destination, s.tick)
 	if target.Behavior != "move_to" {
 		s.activateNextObjective(target)
 	}
+
 	return nil
 }
 
@@ -267,17 +549,9 @@ func (s *Sandbox) activateNextObjective(target *Agent) {
 		return
 	}
 
-	blocked := make([]Vector3, 0, len(s.Agents)-1)
-	for _, a := range s.Agents {
-		if a.ID == target.ID {
-			continue
-		}
-		blocked = append(blocked, a.Position)
-	}
-
-	path := s.planner.FindPath(target.Position, next.Target, s.Width, s.Depth, blocked)
-	if len(path) == 0 {
-		path = []Vector3{next.Target}
+	path, ok := s.planner.FindPath(target.Position, next.Target, s.Width, s.Depth, s.Objects)
+	if !ok {
+		return
 	}
 	_ = target.ActivateNextObjective(path)
 }

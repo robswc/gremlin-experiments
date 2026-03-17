@@ -86,6 +86,8 @@ func NewOrbitAgent(id string, friendly bool, enemy bool, center Vector3) *Agent 
 		orbitRadius:      4,
 		orbitAngle:       0,
 		orbitSpeed:       0.8,
+		followDistance:   2.5,
+		followSpeed:      4.7,
 		orbitCruiseSpeed: 3.0,
 		targetSpeed:      0,
 		desiredYaw:       0,
@@ -97,7 +99,7 @@ func NewOrbitAgent(id string, friendly bool, enemy bool, center Vector3) *Agent 
 		accelRate:        6.4,
 		decelRate:        7.6,
 		motionTime:       0,
-		waypointRadius:   0.25,
+		waypointRadius:   5.0,
 		moveSpeed:        5.5,
 		initialBehavior:  "orbit",
 	}
@@ -133,7 +135,7 @@ func NewTailAgent(id string, friendly bool, enemy bool, center Vector3, followID
 		tailHoverHz:       0.45,
 		minCorrectionWait: 0.08,
 		maxCorrectionWait: 0.45,
-		waypointRadius:    0.25,
+		waypointRadius:    5.0,
 		moveSpeed:         5.5,
 		initialBehavior:   "tail",
 		initialFollowID:   followID,
@@ -154,6 +156,8 @@ func NewStaticAgent(id string, friendly bool, enemy bool, center Vector3) *Agent
 		Orientation:     Orientation{Pitch: 0, Yaw: 0, Roll: 0},
 		Velocity:        Vector3{},
 		orbitCenter:     center,
+		followDistance:  2.5,
+		followSpeed:     4.7,
 		followGoal:      center,
 		turnRate:        2.2,
 		pitchRate:       1.5,
@@ -161,7 +165,7 @@ func NewStaticAgent(id string, friendly bool, enemy bool, center Vector3) *Agent
 		maxSpeed:        8.2,
 		accelRate:       6.8,
 		decelRate:       8.4,
-		waypointRadius:  0.25,
+		waypointRadius:  5.0,
 		moveSpeed:       5.5,
 		initialBehavior: "",
 	}
@@ -218,7 +222,22 @@ func (a *Agent) StepMoveTo(deltaSeconds float64) {
 		goal = a.MovePath[a.PathIndex]
 	}
 
-	a.steerToward(goal, a.moveSpeed)
+	// Steer toward the waypoint without slowRadius, since path is already smoothed.
+	dx = goal.X - a.Position.X
+	dy = goal.Y - a.Position.Y
+	dz = goal.Z - a.Position.Z
+	distance := math.Sqrt(dx*dx + dy*dy + dz*dz)
+
+	horizontalDistance := math.Hypot(dx, dz)
+	a.desiredYaw = math.Atan2(dz, dx)
+	a.desiredPitch = clamp(math.Atan2(dy, horizontalDistance), -a.maxPitch, a.maxPitch)
+
+	// Maintain constant moveSpeed through waypoints; don't apply slowRadius deceleration.
+	a.targetSpeed = a.moveSpeed
+	if distance < 0.05 {
+		a.targetSpeed = 0
+	}
+
 	a.applyDroneMotion(deltaSeconds)
 }
 
@@ -398,6 +417,26 @@ func (a *Agent) StepTail(target *Agent, deltaSeconds float64) {
 
 	a.Orientation.Pitch = 0
 	a.Orientation.Roll = 0
+}
+
+// StepFollow tracks behind a target with direct, continuous correction.
+func (a *Agent) StepFollow(target *Agent, deltaSeconds float64) {
+	if target == nil {
+		a.targetSpeed = 0
+		a.applyDroneMotion(deltaSeconds)
+		return
+	}
+
+	forwardX := math.Cos(target.Orientation.Yaw)
+	forwardZ := math.Sin(target.Orientation.Yaw)
+	followGoal := Vector3{
+		X: target.Position.X - forwardX*a.followDistance,
+		Y: target.Position.Y,
+		Z: target.Position.Z - forwardZ*a.followDistance,
+	}
+
+	a.steerToward(followGoal, a.followSpeed)
+	a.applyDroneMotion(deltaSeconds)
 }
 
 func (a *Agent) steerToward(goal Vector3, preferredSpeed float64) {

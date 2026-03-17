@@ -7,13 +7,25 @@ import { useTailLinkRenderer } from "./hooks/use-tail-link-renderer";
 import { useAgentLabelRenderer } from "./hooks/use-agent-label-renderer";
 import { useMoveTargetRenderer } from "./hooks/use-move-target-renderer";
 import { usePhysicalObjectRenderer } from "./hooks/use-physical-object-renderer";
-import type { CameraPan, ViewMode } from "@/lib/projection";
+import { useRoadRenderer } from "./hooks/use-road-renderer";
+import { projectToNDC, type CameraPan, type ViewMode } from "@/lib/projection";
 
-type SidebarTab = "parameters" | "agents";
+type SidebarTab = "parameters" | "agents" | "fleets";
+type TrackingTarget = "none" | `agent:${string}` | `object:${string}`;
+
+function formatTrackingLabel(target: TrackingTarget): string {
+	if (target === "none") {
+		return "none";
+	}
+
+	const [kind, id] = target.split(":");
+	return `${kind} ${id}`;
+}
 
 export function App() {
 	const gridCanvasRef = useRef<HTMLCanvasElement>(null);
 	const vectorCanvasRef = useRef<HTMLCanvasElement>(null);
+	const roadCanvasRef = useRef<HTMLCanvasElement>(null);
 	const objectCanvasRef = useRef<HTMLCanvasElement>(null);
 	const tailLinkCanvasRef = useRef<HTMLCanvasElement>(null);
 	const moveTargetCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -24,6 +36,7 @@ export function App() {
 	const [viewMode, setViewMode] = useState<ViewMode>("iso");
 	const [zoom, setZoom] = useState(1);
 	const [cameraPan, setCameraPan] = useState<CameraPan>({ x: 0, y: 0 });
+	const [trackingTarget, setTrackingTarget] = useState<TrackingTarget>("none");
 	const [isPanning, setIsPanning] = useState(false);
 	const [showGroundVectors, setShowGroundVectors] = useState(true);
 	const [showTailLinks, setShowTailLinks] = useState(true);
@@ -34,7 +47,29 @@ export function App() {
 	const [agentCommands, setAgentCommands] = useState<Record<string, string>>({});
 	const [agentBusy, setAgentBusy] = useState<Record<string, boolean>>({});
 	const [agentStatus, setAgentStatus] = useState<Record<string, string>>({});
+	const [selectedFleetID, setSelectedFleetID] = useState("");
+	const [fleetName, setFleetName] = useState("");
+	const [fleetLeaderID, setFleetLeaderID] = useState("");
+	const [fleetAgentIDs, setFleetAgentIDs] = useState<string[]>([]);
+	const [fleetObjectIDs, setFleetObjectIDs] = useState<string[]>([]);
+	const [fleetBusy, setFleetBusy] = useState(false);
+	const [fleetStatus, setFleetStatus] = useState("");
 	const { state, connected } = useSimulation("/api/events", { smooth: smoothMotion });
+	const trackedEntity =
+		trackingTarget === "none"
+			? null
+			: trackingTarget.startsWith("agent:")
+				? state?.agents.find((agent) => agent.id === trackingTarget.slice(6)) ?? null
+				: state?.objects.find((object) => object.id === trackingTarget.slice(7)) ?? null;
+
+	const clearTracking = () => {
+		setTrackingTarget("none");
+	};
+
+	const nudgePan = (dx: number, dy: number) => {
+		setTrackingTarget("none");
+		setCameraPan((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
+	};
 
 	const handleReset = async () => {
 		setResetting(true);
@@ -45,12 +80,9 @@ export function App() {
 		}
 	};
 
-	const nudgePan = (dx: number, dy: number) => {
-		setCameraPan((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
-	};
-
 	const resetCamera = () => {
 		setZoom(1);
+		setTrackingTarget("none");
 		setCameraPan({ x: 0, y: 0 });
 	};
 
@@ -61,6 +93,149 @@ export function App() {
 	const setStatus = (agentID: string, message: string) => {
 		setAgentStatus((prev) => ({ ...prev, [agentID]: message }));
 	};
+
+	const applyFleetToForm = (fleet: {
+		id: string;
+		name: string;
+		leaderId: string;
+		agentIds?: string[];
+		objectIds?: string[];
+	}) => {
+		setSelectedFleetID(fleet.id);
+		setFleetName(fleet.name);
+		setFleetLeaderID(fleet.leaderId);
+		setFleetAgentIDs(fleet.agentIds ? [...fleet.agentIds] : []);
+		setFleetObjectIDs(fleet.objectIds ? [...fleet.objectIds] : []);
+		setFleetStatus("");
+	};
+
+	const startNewFleet = () => {
+		const leader = state?.agents[0]?.id ?? "";
+		setSelectedFleetID("");
+		setFleetName("");
+		setFleetLeaderID(leader);
+		setFleetAgentIDs(leader ? [leader] : []);
+		setFleetObjectIDs([]);
+		setFleetStatus("");
+	};
+
+	const toggleID = (items: string[], id: string) =>
+		items.includes(id) ? items.filter((item) => item !== id) : [...items, id];
+
+	const toggleFleetAgent = (id: string) => {
+		setFleetAgentIDs((prev) => toggleID(prev, id));
+	};
+
+	const toggleFleetObject = (id: string) => {
+		setFleetObjectIDs((prev) => toggleID(prev, id));
+	};
+
+	const handleSaveFleet = async () => {
+		setFleetBusy(true);
+		setFleetStatus("");
+		try {
+			const body = {
+				id: selectedFleetID || undefined,
+				name: fleetName,
+				leaderId: fleetLeaderID,
+				agentIds: fleetAgentIDs,
+				objectIds: fleetObjectIDs,
+			};
+			const response = await fetch("/api/fleet", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(body),
+			});
+			if (!response.ok) {
+				const text = await response.text();
+				throw new Error(text || "Fleet save failed");
+			}
+			const json: { fleet?: { id?: string } } = await response.json();
+			if (json.fleet?.id) {
+				setSelectedFleetID(json.fleet.id);
+			}
+			setFleetStatus("Fleet saved");
+		} catch (error) {
+			setFleetStatus(error instanceof Error ? error.message : "Fleet save failed");
+		} finally {
+			setFleetBusy(false);
+		}
+	};
+
+	const handleDeleteFleet = async () => {
+		if (!selectedFleetID) {
+			setFleetStatus("Select a fleet first");
+			return;
+		}
+		setFleetBusy(true);
+		setFleetStatus("");
+		try {
+			const response = await fetch(`/api/fleet?id=${encodeURIComponent(selectedFleetID)}`, {
+				method: "DELETE",
+			});
+			if (!response.ok) {
+				const text = await response.text();
+				throw new Error(text || "Fleet delete failed");
+			}
+			startNewFleet();
+			setFleetStatus("Fleet deleted");
+		} catch (error) {
+			setFleetStatus(error instanceof Error ? error.message : "Fleet delete failed");
+		} finally {
+			setFleetBusy(false);
+		}
+	};
+
+	useEffect(() => {
+		if (trackingTarget === "none") {
+			return;
+		}
+
+		if (!trackedEntity) {
+			setTrackingTarget("none");
+			return;
+		}
+
+		const [nx, ny] = projectToNDC(trackedEntity.position, viewMode);
+		setCameraPan({ x: -nx * zoom, y: -ny * zoom });
+	}, [trackedEntity, trackingTarget, viewMode, zoom]);
+
+	useEffect(() => {
+		if (!state) {
+			return;
+		}
+
+		if (state.fleets.length === 0) {
+			if (selectedFleetID !== "") {
+				const leader = state.agents[0]?.id ?? "";
+				setSelectedFleetID("");
+				setFleetName("");
+				setFleetLeaderID(leader);
+				setFleetAgentIDs(leader ? [leader] : []);
+				setFleetObjectIDs([]);
+				setFleetStatus("");
+			}
+			return;
+		}
+
+		if (selectedFleetID) {
+			const exists = state.fleets.some((fleet) => fleet.id === selectedFleetID);
+			if (!exists) {
+				const leader = state.agents[0]?.id ?? "";
+				setSelectedFleetID("");
+				setFleetName("");
+				setFleetLeaderID(leader);
+				setFleetAgentIDs(leader ? [leader] : []);
+				setFleetObjectIDs([]);
+				setFleetStatus("");
+			}
+			return;
+		}
+
+		if (!fleetName && !selectedFleetID) {
+			applyFleetToForm(state.fleets[0]);
+		}
+	}, [state, selectedFleetID, fleetName]);
 
 	const handleBehaviorChange = async (agentID: string, behavior: "stationary" | "orbit") => {
 		setBusy(agentID, true);
@@ -125,13 +300,14 @@ export function App() {
 	useEffect(() => {
 		const gridCanvas = gridCanvasRef.current;
 		const vectorCanvas = vectorCanvasRef.current;
+		const roadCanvas = roadCanvasRef.current;
 		const objectCanvas = objectCanvasRef.current;
 		const tailLinkCanvas = tailLinkCanvasRef.current;
 		const moveTargetCanvas = moveTargetCanvasRef.current;
 		const labelCanvas = labelCanvasRef.current;
 		const canvas = canvasRef.current;
 		const viewport = viewportRef.current;
-		if (!gridCanvas || !vectorCanvas || !objectCanvas || !tailLinkCanvas || !moveTargetCanvas || !labelCanvas || !canvas || !viewport) return;
+		if (!gridCanvas || !vectorCanvas || !roadCanvas || !objectCanvas || !tailLinkCanvas || !moveTargetCanvas || !labelCanvas || !canvas || !viewport) return;
 
 		const resize = () => {
 			const width = Math.max(1, Math.floor(viewport.clientWidth));
@@ -140,6 +316,8 @@ export function App() {
 			gridCanvas.height = Math.floor(height * devicePixelRatio);
 			vectorCanvas.width = Math.floor(width * devicePixelRatio);
 			vectorCanvas.height = Math.floor(height * devicePixelRatio);
+			roadCanvas.width = Math.floor(width * devicePixelRatio);
+			roadCanvas.height = Math.floor(height * devicePixelRatio);
 			objectCanvas.width = Math.floor(width * devicePixelRatio);
 			objectCanvas.height = Math.floor(height * devicePixelRatio);
 			tailLinkCanvas.width = Math.floor(width * devicePixelRatio);
@@ -160,6 +338,8 @@ export function App() {
 			gridCanvas.height = Math.floor(Math.max(1, height) * devicePixelRatio);
 			vectorCanvas.width = Math.floor(Math.max(1, width) * devicePixelRatio);
 			vectorCanvas.height = Math.floor(Math.max(1, height) * devicePixelRatio);
+			roadCanvas.width = Math.floor(Math.max(1, width) * devicePixelRatio);
+			roadCanvas.height = Math.floor(Math.max(1, height) * devicePixelRatio);
 			objectCanvas.width = Math.floor(Math.max(1, width) * devicePixelRatio);
 			objectCanvas.height = Math.floor(Math.max(1, height) * devicePixelRatio);
 			tailLinkCanvas.width = Math.floor(Math.max(1, width) * devicePixelRatio);
@@ -177,6 +357,7 @@ export function App() {
 
 	useFloorGridRenderer(gridCanvasRef, viewMode, zoom, cameraPan);
 	useGroundVectorRenderer(vectorCanvasRef, state?.agents ?? [], viewMode, showGroundVectors, zoom, cameraPan);
+	useRoadRenderer(roadCanvasRef, state?.roads ?? [], viewMode, zoom, cameraPan);
 	usePhysicalObjectRenderer(objectCanvasRef, state?.objects ?? [], viewMode, zoom, cameraPan);
 	useTailLinkRenderer(tailLinkCanvasRef, state?.agents ?? [], viewMode, showTailLinks, zoom, cameraPan);
 	useMoveTargetRenderer(moveTargetCanvasRef, state?.agents ?? [], viewMode, zoom, cameraPan);
@@ -184,20 +365,16 @@ export function App() {
 	useAgentLabelRenderer(labelCanvasRef, state?.agents ?? [], viewMode, zoom, cameraPan, showCoordinateLabels);
 
 	return (
-		<div className="min-h-screen bg-background text-foreground">
-			<div className="mx-auto grid min-h-screen grid-cols-1 gap-4 p-4 md:grid-cols-[1fr_320px] md:gap-6 md:p-6">
-				<main className="flex flex-col rounded-lg border border-border bg-card p-6">
-					<div className="mb-4 flex items-center justify-between">
-						<h1 className="text-2xl font-semibold tracking-tight">Simulation</h1>
-						<span className={`inline-flex items-center gap-1.5 text-xs ${connected ? "text-green-400" : "text-red-400"}`}>
-							<span className={`h-2 w-2 rounded-full ${connected ? "bg-green-400" : "bg-red-400"}`} />
-							{connected ? "Connected" : "Disconnected"}
-						</span>
-					</div>
+		<div className="h-screen w-screen overflow-hidden bg-background text-foreground">
+			<div className="grid h-full grid-cols-1 md:grid-cols-[minmax(0,1fr)_360px]">
+				<main className="relative min-h-0">
 					<div
 						ref={viewportRef}
 						tabIndex={0}
 						onPointerDown={(e) => {
+							if (trackingTarget !== "none") {
+								clearTracking();
+							}
 							dragRef.current = { active: true, x: e.clientX, y: e.clientY };
 							setIsPanning(true);
 							e.currentTarget.setPointerCapture(e.pointerId);
@@ -242,20 +419,27 @@ export function App() {
 								nudgePan(0, -step);
 							}
 						}}
-						className="relative min-h-[420px] flex-1 overflow-hidden rounded-md bg-black outline-none"
+						className="relative h-full w-full overflow-hidden bg-black outline-none"
 						style={{ cursor: isPanning ? "grabbing" : "grab", touchAction: "none" }}
 					>
+						<div className="pointer-events-none absolute left-3 top-3 z-50">
+							<span className={`inline-flex items-center gap-1.5 rounded bg-background/80 px-2 py-1 text-xs backdrop-blur-sm ${connected ? "text-green-400" : "text-red-400"}`}>
+								<span className={`h-2 w-2 rounded-full ${connected ? "bg-green-400" : "bg-red-400"}`} />
+								{connected ? "Connected" : "Disconnected"}
+							</span>
+						</div>
 						<canvas ref={gridCanvasRef} className="absolute inset-0 z-0 block h-full w-full" />
 						<canvas ref={vectorCanvasRef} className="absolute inset-0 z-10 block h-full w-full" />
+						<canvas ref={roadCanvasRef} className="absolute inset-0 z-[12] block h-full w-full" />
 						<canvas ref={objectCanvasRef} className="absolute inset-0 z-[15] block h-full w-full" />
 						<canvas ref={tailLinkCanvasRef} className="absolute inset-0 z-20 block h-full w-full" />
 						<canvas ref={moveTargetCanvasRef} className="pointer-events-none absolute inset-0 z-[25] block h-full w-full" />
-						<canvas ref={canvasRef} className="relative z-30 block h-full w-full rounded-md bg-transparent" />
+						<canvas ref={canvasRef} className="relative z-30 block h-full w-full bg-transparent" />
 						<canvas ref={labelCanvasRef} className="pointer-events-none absolute inset-0 z-40 block h-full w-full" />
 					</div>
 				</main>
 
-				<aside className="rounded-lg border border-border bg-card p-6">
+				<aside className="h-full overflow-y-auto border-l border-border bg-card p-6">
 					<div className="flex items-center gap-2">
 						<button
 							type="button"
@@ -278,6 +462,17 @@ export function App() {
 							}`}
 						>
 							Agents
+						</button>
+						<button
+							type="button"
+							onClick={() => setSidebarTab("fleets")}
+							className={`rounded px-3 py-1.5 text-sm ${
+								sidebarTab === "fleets"
+									? "border border-border bg-background text-foreground"
+									: "border border-transparent bg-muted/30 text-muted-foreground"
+							}`}
+						>
+							Fleets
 						</button>
 					</div>
 
@@ -307,6 +502,30 @@ export function App() {
 									<option value="side">Side (Z / Y)</option>
 									<option value="iso">Isometric</option>
 								</select>
+								<label htmlFor="camera-track" className="mt-2 text-xs uppercase tracking-wide text-muted-foreground">
+									Track Target
+								</label>
+								<select
+									id="camera-track"
+									value={trackingTarget}
+									onChange={(e) => setTrackingTarget(e.target.value as TrackingTarget)}
+									className="w-full rounded border border-border bg-background px-2 py-1.5 text-sm"
+								>
+									<option value="none">None</option>
+									{state?.agents.map((agent) => (
+										<option key={`agent:${agent.id}`} value={`agent:${agent.id}`}>
+											Agent: {agent.id}
+										</option>
+									))}
+									{state?.objects.map((object) => (
+										<option key={`object:${object.id}`} value={`object:${object.id}`}>
+											Object: {object.id}
+										</option>
+									))}
+								</select>
+								<p className="text-xs text-muted-foreground">
+									Tracking: {formatTrackingLabel(trackingTarget)}
+								</p>
 								<div className="mt-2 flex items-center gap-2">
 									<button
 										type="button"
@@ -321,6 +540,14 @@ export function App() {
 										className="rounded border border-border bg-background px-2 py-1 text-xs"
 									>
 										Reset Cam
+									</button>
+									<button
+										type="button"
+										onClick={clearTracking}
+										disabled={trackingTarget === "none"}
+										className="rounded border border-border bg-background px-2 py-1 text-xs disabled:opacity-60"
+									>
+										Stop Track
 									</button>
 									<button
 										type="button"
@@ -364,7 +591,9 @@ export function App() {
 										pan ({cameraPan.x.toFixed(2)}, {cameraPan.y.toFixed(2)})
 									</span>
 								</div>
-								<p className="text-xs text-muted-foreground">Drag the simulation view or use arrow keys while focused.</p>
+								<p className="text-xs text-muted-foreground">
+									Drag the simulation view or use arrow keys while focused. Manual camera moves stop tracking.
+								</p>
 								<label className="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
 									<input
 										type="checkbox"
@@ -494,6 +723,134 @@ export function App() {
 										</div>
 									);
 								})}
+							</div>
+						</>
+					)}
+
+					{sidebarTab === "fleets" && (
+						<>
+							<h2 className="mt-4 text-lg font-semibold tracking-tight">Fleets</h2>
+							<p className="mt-2 text-sm text-muted-foreground">Total: {state?.fleets.length ?? 0}</p>
+							<div className="mt-3 flex gap-2">
+								<button
+									type="button"
+									onClick={startNewFleet}
+									disabled={fleetBusy}
+									className="rounded border border-border bg-background px-2 py-1 text-xs disabled:opacity-60"
+								>
+									New Fleet
+								</button>
+								<button
+									type="button"
+									onClick={() => void handleSaveFleet()}
+									disabled={fleetBusy}
+									className="rounded border border-border bg-background px-2 py-1 text-xs disabled:opacity-60"
+								>
+									{fleetBusy ? "Saving..." : "Save Fleet"}
+								</button>
+								<button
+									type="button"
+									onClick={() => void handleDeleteFleet()}
+									disabled={fleetBusy || !selectedFleetID}
+									className="rounded border border-border bg-background px-2 py-1 text-xs disabled:opacity-60"
+								>
+									Delete
+								</button>
+							</div>
+
+							<div className="mt-3 space-y-2 text-xs text-muted-foreground">
+								<label className="block text-[10px] uppercase tracking-wide">Name</label>
+								<input
+									type="text"
+									value={fleetName}
+									onChange={(e) => setFleetName(e.target.value)}
+									placeholder="Alpha Fleet"
+									disabled={fleetBusy}
+									className="w-full rounded border border-border bg-background px-2 py-1 text-xs"
+								/>
+
+								<label className="block text-[10px] uppercase tracking-wide">Leader</label>
+								<select
+									value={fleetLeaderID}
+									onChange={(e) => {
+										const nextLeader = e.target.value;
+										setFleetLeaderID(nextLeader);
+										if (nextLeader && !fleetAgentIDs.includes(nextLeader)) {
+											setFleetAgentIDs((prev) => [nextLeader, ...prev]);
+										}
+									}}
+									disabled={fleetBusy}
+									className="w-full rounded border border-border bg-background px-2 py-1 text-xs"
+								>
+									<option value="">Select leader</option>
+									{state?.agents.map((agent) => (
+										<option key={agent.id} value={agent.id}>
+											{agent.id}
+										</option>
+									))}
+								</select>
+
+								<label className="block text-[10px] uppercase tracking-wide">Agents</label>
+								<div className="max-h-28 space-y-1 overflow-y-auto rounded border border-border p-2">
+									{state?.agents.map((agent) => (
+										<label key={agent.id} className="flex items-center gap-2">
+											<input
+												type="checkbox"
+												checked={fleetAgentIDs.includes(agent.id)}
+												onChange={() => toggleFleetAgent(agent.id)}
+												disabled={fleetBusy}
+											/>
+											{agent.id}
+										</label>
+									))}
+								</div>
+
+								<label className="block text-[10px] uppercase tracking-wide">Objects</label>
+								<div className="max-h-28 space-y-1 overflow-y-auto rounded border border-border p-2">
+									{state?.objects.map((object) => (
+										<label key={object.id} className="flex items-center gap-2">
+											<input
+												type="checkbox"
+												checked={fleetObjectIDs.includes(object.id)}
+												onChange={() => toggleFleetObject(object.id)}
+												disabled={fleetBusy}
+											/>
+											{object.id}
+										</label>
+									))}
+									{(state?.objects.length ?? 0) === 0 && <p className="text-[10px]">No objects available</p>}
+								</div>
+								<p className="min-h-4 text-[10px]">{fleetStatus || " "}</p>
+							</div>
+
+							<div className="mt-3 space-y-2">
+								<label className="block text-[10px] uppercase tracking-wide text-muted-foreground">Existing Fleets</label>
+								<div className="max-h-44 space-y-1 overflow-y-auto">
+									{state?.fleets.map((fleet) => (
+										<button
+											key={fleet.id}
+											type="button"
+											onClick={() => applyFleetToForm(fleet)}
+											className={`w-full rounded border px-2 py-1 text-left text-xs ${
+												selectedFleetID === fleet.id
+													? "border-border bg-background"
+													: "border-border/50 bg-muted/20"
+											}`}
+										>
+											<div className="flex items-center justify-between gap-2">
+												<span>{fleet.name}</span>
+												<span className="text-[10px] text-muted-foreground">{fleet.id}</span>
+											</div>
+											<p className="text-[10px] text-muted-foreground">leader: {fleet.leaderId}</p>
+											<p className="text-[10px] text-muted-foreground">
+												agents: {fleet.agentIds?.length ?? 0} objects: {fleet.objectIds?.length ?? 0}
+											</p>
+										</button>
+									))}
+									{(state?.fleets.length ?? 0) === 0 && (
+										<p className="rounded border border-dashed border-border p-2 text-xs text-muted-foreground">No fleets yet</p>
+									)}
+								</div>
 							</div>
 						</>
 					)}

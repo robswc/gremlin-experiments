@@ -23,6 +23,21 @@ interface PhysicalObject {
   radius?: number;
 }
 
+interface Road {
+  id: string;
+  name: string;
+  width: number;
+  points: Vector3[];
+}
+
+interface Fleet {
+  id: string;
+  name: string;
+  leaderId: string;
+  agentIds?: string[];
+  objectIds?: string[];
+}
+
 interface Orientation {
   pitch: number;
   yaw: number;
@@ -40,6 +55,8 @@ interface Agent {
   orientation: Orientation;
   velocity: Vector3;
   moveGoal?: Vector3;
+  movePath?: Vector3[];
+  pathIndex?: number;
   activeObjective?: MoveObjective;
   objectives?: MoveObjective[];
 }
@@ -48,6 +65,8 @@ interface SandboxState {
   tick: number;
   agents: Agent[];
   objects: PhysicalObject[];
+  roads: Road[];
+  fleets: Fleet[];
 }
 
 interface UseSimulationOptions {
@@ -65,6 +84,19 @@ function cloneState(state: SandboxState): SandboxState {
       height: o.height,
       radius: o.radius,
     })),
+    roads: state.roads.map((road) => ({
+      id: road.id,
+      name: road.name,
+      width: road.width,
+      points: road.points.map((point) => ({ ...point })),
+    })),
+    fleets: state.fleets.map((f) => ({
+      id: f.id,
+      name: f.name,
+      leaderId: f.leaderId,
+      agentIds: f.agentIds ? [...f.agentIds] : undefined,
+      objectIds: f.objectIds ? [...f.objectIds] : undefined,
+    })),
     agents: state.agents.map((a) => ({
       id: a.id,
       friendly: a.friendly,
@@ -76,6 +108,8 @@ function cloneState(state: SandboxState): SandboxState {
       orientation: { ...a.orientation },
       velocity: { ...a.velocity },
       moveGoal: a.moveGoal ? { ...a.moveGoal } : undefined,
+      movePath: a.movePath?.map((point) => ({ ...point })),
+      pathIndex: a.pathIndex,
       activeObjective: a.activeObjective
         ? {
             id: a.activeObjective.id,
@@ -142,6 +176,8 @@ function interpolateState(current: SandboxState, target: SandboxState, t: number
         z: lerp(a.velocity.z, ta.velocity.z, t),
       },
       moveGoal: ta.moveGoal ? { ...ta.moveGoal } : undefined,
+      movePath: ta.movePath?.map((point) => ({ ...point })),
+      pathIndex: ta.pathIndex,
       activeObjective: ta.activeObjective
         ? {
             id: ta.activeObjective.id,
@@ -170,6 +206,19 @@ function interpolateState(current: SandboxState, target: SandboxState, t: number
       size: o.size,
       height: o.height,
       radius: o.radius,
+    })),
+    roads: target.roads.map((road) => ({
+      id: road.id,
+      name: road.name,
+      width: road.width,
+      points: road.points.map((point) => ({ ...point })),
+    })),
+    fleets: target.fleets.map((f) => ({
+      id: f.id,
+      name: f.name,
+      leaderId: f.leaderId,
+      agentIds: f.agentIds ? [...f.agentIds] : undefined,
+      objectIds: f.objectIds ? [...f.objectIds] : undefined,
     })),
     agents,
   };

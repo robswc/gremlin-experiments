@@ -19,9 +19,45 @@ func main() {
 	if err := sandbox.SpawnOrbitAgentFromPoint("sp1", "friendly-1", true, false); err != nil {
 		log.Fatalf("failed to spawn friendly-1 from sp1: %v", err)
 	}
+
+	// Seed two additional friendlies around the leader so the fleet starts spread out.
+	sandbox.AddAgent(simulation.NewOrbitAgent("friendly-2", true, false, simulation.Vector3{X: 70, Y: 5, Z: 6}))
+	sandbox.AddAgent(simulation.NewOrbitAgent("friendly-3", true, false, simulation.Vector3{X: 58, Y: 5, Z: -6}))
+
+	if _, err := sandbox.UpsertFleet("", "Alpha Fleet", "friendly-1", []string{"friendly-1", "friendly-2", "friendly-3"}, nil); err != nil {
+		log.Fatalf("failed to seed default fleet: %v", err)
+	}
 	sandbox.AddObject(simulation.NewSquareObject("square-1", simulation.Vector3{X: 32, Y: 16, Z: 32}, 32))
 	sandbox.AddObject(simulation.NewSphereNoGoZone("no-go-aa-1", simulation.Vector3{X: -32, Y: 0, Z: -32}, 18))
 	sandbox.AddObject(simulation.NewSphereNoGoZone("no-go-aa-2", simulation.Vector3{X: -64, Y: 0, Z: 32}, 18))
+	sandbox.AddRoad(simulation.NewRoad(
+		"road-gold-rd",
+		"Gold Rd.",
+		10,
+		[]simulation.Vector3{
+			{X: -256, Y: 0, Z: 64},
+			{X: -128, Y: 0, Z: 64},
+			{X: 0, Y: 0, Z: 64},
+			{X: 128, Y: 0, Z: 64},
+			{X: 256, Y: 0, Z: 64},
+			{X: 288, Y: 0, Z: 48},
+			{X: 312, Y: 0, Z: 24},
+			{X: 320, Y: 0, Z: 0},
+			{X: 312, Y: 0, Z: -24},
+			{X: 288, Y: 0, Z: -48},
+			{X: 256, Y: 0, Z: -64},
+			{X: 128, Y: 0, Z: -64},
+			{X: 0, Y: 0, Z: -64},
+			{X: -128, Y: 0, Z: -64},
+			{X: -256, Y: 0, Z: -64},
+			{X: -288, Y: 0, Z: -48},
+			{X: -312, Y: 0, Z: -24},
+			{X: -320, Y: 0, Z: 0},
+			{X: -312, Y: 0, Z: 24},
+			{X: -288, Y: 0, Z: 48},
+			{X: -256, Y: 0, Z: 64},
+		},
+	))
 
 	// Start simulation in background
 	go sandbox.Run()
@@ -122,7 +158,11 @@ func main() {
 		}
 
 		if err := sandbox.MoveAgentTo(req.ID, destination); err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			status := http.StatusBadRequest
+			if strings.Contains(err.Error(), "not found") {
+				status = http.StatusNotFound
+			}
+			http.Error(w, err.Error(), status)
 			return
 		}
 
@@ -184,6 +224,63 @@ func main() {
 			"id":       req.ID,
 			"behavior": strings.ToLower(req.Behavior),
 		})
+	})
+
+	// Create/update a fleet.
+	http.HandleFunc("/fleet", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if r.Method == http.MethodOptions {
+			w.Header().Set("Access-Control-Allow-Methods", "POST, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		switch r.Method {
+		case http.MethodPost:
+			type fleetUpsertRequest struct {
+				ID        string   `json:"id"`
+				Name      string   `json:"name"`
+				LeaderID  string   `json:"leaderId"`
+				AgentIDs  []string `json:"agentIds"`
+				ObjectIDs []string `json:"objectIds"`
+			}
+
+			var req fleetUpsertRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "invalid json body", http.StatusBadRequest)
+				return
+			}
+
+			fleet, err := sandbox.UpsertFleet(req.ID, req.Name, req.LeaderID, req.AgentIDs, req.ObjectIDs)
+			if err != nil {
+				status := http.StatusBadRequest
+				if strings.Contains(err.Error(), "not found") {
+					status = http.StatusNotFound
+				}
+				http.Error(w, err.Error(), status)
+				return
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":    true,
+				"fleet": fleet,
+			})
+		case http.MethodDelete:
+			id := strings.TrimSpace(r.URL.Query().Get("id"))
+			if err := sandbox.DeleteFleet(id); err != nil {
+				status := http.StatusBadRequest
+				if strings.Contains(err.Error(), "not found") {
+					status = http.StatusNotFound
+				}
+				http.Error(w, err.Error(), status)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	})
 
 	addr := ":8080"

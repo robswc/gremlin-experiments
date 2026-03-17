@@ -46,13 +46,19 @@ export function useTailLinkRenderer(
 
         if (enabled) {
           const byId = new Map(agents.map((a) => [a.id, a]));
-          ctx.strokeStyle = "rgba(255, 255, 255, 0.66)";
-          ctx.lineWidth = Math.max(1, 1.6 * devicePixelRatio);
 
           for (const a of agents) {
-            if (a.behavior !== "tail" || !a.followId) continue;
+            if ((a.behavior !== "tail" && a.behavior !== "follow") || !a.followId) continue;
             const target = byId.get(a.followId);
             if (!target) continue;
+
+            if (a.behavior === "follow") {
+              ctx.strokeStyle = "rgba(255, 255, 255, 0.72)";
+              ctx.lineWidth = Math.max(1, 1.1 * devicePixelRatio);
+            } else {
+              ctx.strokeStyle = "rgba(255, 255, 255, 0.66)";
+              ctx.lineWidth = Math.max(1, 1.6 * devicePixelRatio);
+            }
 
             const [axNdcX, axNdcY] = projectToNDC(a.position, viewMode);
             const [txNdcX, txNdcY] = projectToNDC(target.position, viewMode);

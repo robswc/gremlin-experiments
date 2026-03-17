@@ -223,3 +223,6 @@ From repo root, run in separate terminals:
 
 ## Minimal-Dependency Principle
 This project intentionally favors standard library/simple primitives over additional packages where possible. Keep that bias unless there is clear value to adding dependencies.
+
+# Only take in the context you need
+Do not take in more context than is nessesary to complete the task, please.  Thanks!
