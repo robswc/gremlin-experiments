@@ -22,24 +22,24 @@ type Orientation struct {
 
 // Agent is an object that exists and moves within a Sandbox.
 type Agent struct {
-	ID              string          `json:"id"`
-	Friendly        bool            `json:"friendly"`
-	Enemy           bool            `json:"enemy"`
-	Behavior        string          `json:"behavior"`
-	MovementMode    string          `json:"movementMode"`
-	FollowID        string          `json:"followId,omitempty"`
-	AssignedPathID  string          `json:"assignedPathId,omitempty"`
-	AssignedPathMode string         `json:"assignedPathMode,omitempty"`
-	AssignedPath    []Vector3       `json:"assignedPath,omitempty"`
-	AssignedPathIndex int           `json:"assignedPathIndex,omitempty"`
-	Position        Vector3         `json:"position"`
-	Orientation     Orientation     `json:"orientation"`
-	Velocity        Vector3         `json:"velocity"`
-	MoveGoal        *Vector3        `json:"moveGoal,omitempty"`
-	MovePath        []Vector3       `json:"movePath,omitempty"`
-	PathIndex       int             `json:"pathIndex,omitempty"`
-	ActiveObjective *MoveObjective  `json:"activeObjective,omitempty"`
-	Objectives      []MoveObjective `json:"objectives,omitempty"`
+	ID                string          `json:"id"`
+	Friendly          bool            `json:"friendly"`
+	Enemy             bool            `json:"enemy"`
+	Behavior          string          `json:"behavior"`
+	MovementMode      string          `json:"movementMode"`
+	FollowID          string          `json:"followId,omitempty"`
+	AssignedPathID    string          `json:"assignedPathId,omitempty"`
+	AssignedPathMode  string          `json:"assignedPathMode,omitempty"`
+	AssignedPath      []Vector3       `json:"assignedPath,omitempty"`
+	AssignedPathIndex int             `json:"assignedPathIndex,omitempty"`
+	Position          Vector3         `json:"position"`
+	Orientation       Orientation     `json:"orientation"`
+	Velocity          Vector3         `json:"velocity"`
+	MoveGoal          *Vector3        `json:"moveGoal,omitempty"`
+	MovePath          []Vector3       `json:"movePath,omitempty"`
+	PathIndex         int             `json:"pathIndex,omitempty"`
+	ActiveObjective   *MoveObjective  `json:"activeObjective,omitempty"`
+	Objectives        []MoveObjective `json:"objectives,omitempty"`
 
 	orbitCenter Vector3
 	orbitRadius float64
