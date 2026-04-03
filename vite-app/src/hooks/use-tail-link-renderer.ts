@@ -3,6 +3,8 @@ import {
   applyViewTransformToNDC,
   ndcToPixel,
   projectToNDC,
+  projectToNDCOrbit,
+  type CameraOrbit,
   type CameraPan,
   type Vector3,
   type ViewMode,
@@ -21,7 +23,8 @@ export function useTailLinkRenderer(
   viewMode: ViewMode,
   enabled: boolean,
   zoom: number,
-  cameraPan: CameraPan
+  cameraPan: CameraPan,
+  cameraOrbit?: CameraOrbit
 ) {
   useEffect(() => {
     let rafId = 0;
@@ -60,8 +63,8 @@ export function useTailLinkRenderer(
               ctx.lineWidth = Math.max(1, 1.6 * devicePixelRatio);
             }
 
-            const [axNdcX, axNdcY] = projectToNDC(a.position, viewMode);
-            const [txNdcX, txNdcY] = projectToNDC(target.position, viewMode);
+            const [axNdcX, axNdcY] = cameraOrbit ? projectToNDCOrbit(a.position, cameraOrbit) : projectToNDC(a.position, viewMode);
+            const [txNdcX, txNdcY] = cameraOrbit ? projectToNDCOrbit(target.position, cameraOrbit) : projectToNDC(target.position, viewMode);
             const [zax, zay] = applyViewTransformToNDC(axNdcX, axNdcY, zoom, cameraPan);
             const [ztx, zty] = applyViewTransformToNDC(txNdcX, txNdcY, zoom, cameraPan);
             const [ax, ay] = ndcToPixel(zax, zay, width, height);
@@ -80,5 +83,5 @@ export function useTailLinkRenderer(
 
     rafId = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(rafId);
-  }, [canvasRef, agents, viewMode, enabled, zoom, cameraPan]);
+  }, [canvasRef, agents, viewMode, enabled, zoom, cameraPan, cameraOrbit]);
 }

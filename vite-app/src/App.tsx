@@ -8,7 +8,7 @@ import { useAgentLabelRenderer } from "./hooks/use-agent-label-renderer";
 import { useMoveTargetRenderer } from "./hooks/use-move-target-renderer";
 import { usePhysicalObjectRenderer } from "./hooks/use-physical-object-renderer";
 import { useRoadRenderer } from "./hooks/use-road-renderer";
-import { projectToNDC, type CameraPan, type ViewMode } from "@/lib/projection";
+import { projectToNDC, type CameraOrbit, type CameraPan, type ViewMode, VIEW_MODE_ORBIT_PRESETS } from "@/lib/projection";
 
 type SidebarTab = "parameters" | "agents" | "fleets";
 type TrackingTarget = "none" | `agent:${string}` | `object:${string}`;
@@ -32,10 +32,12 @@ export function App() {
 	const labelCanvasRef = useRef<HTMLCanvasElement>(null);
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const viewportRef = useRef<HTMLDivElement>(null);
-	const dragRef = useRef<{ active: boolean; x: number; y: number }>({ active: false, x: 0, y: 0 });
+	const dragRef = useRef<{ active: boolean; x: number; y: number; shift: boolean }>({ active: false, x: 0, y: 0, shift: false });
 	const [viewMode, setViewMode] = useState<ViewMode>("iso");
 	const [zoom, setZoom] = useState(1);
 	const [cameraPan, setCameraPan] = useState<CameraPan>({ x: 0, y: 0 });
+	const [cameraOrbit, setCameraOrbit] = useState<CameraOrbit>(VIEW_MODE_ORBIT_PRESETS["iso"]);
+	const [isOrbiting, setIsOrbiting] = useState(false);
 	const [trackingTarget, setTrackingTarget] = useState<TrackingTarget>("none");
 	const [isPanning, setIsPanning] = useState(false);
 	const [showGroundVectors, setShowGroundVectors] = useState(true);
@@ -84,6 +86,7 @@ export function App() {
 		setZoom(1);
 		setTrackingTarget("none");
 		setCameraPan({ x: 0, y: 0 });
+		setCameraOrbit(VIEW_MODE_ORBIT_PRESETS[viewMode]);
 	};
 
 	const setBusy = (agentID: string, busy: boolean) => {
@@ -185,6 +188,10 @@ export function App() {
 			setFleetBusy(false);
 		}
 	};
+
+	useEffect(() => {
+		setCameraOrbit(VIEW_MODE_ORBIT_PRESETS[viewMode]);
+	}, [viewMode]);
 
 	useEffect(() => {
 		if (trackingTarget === "none") {
@@ -355,14 +362,14 @@ export function App() {
 		return () => observer.disconnect();
 	}, []);
 
-	useFloorGridRenderer(gridCanvasRef, viewMode, zoom, cameraPan);
-	useGroundVectorRenderer(vectorCanvasRef, state?.agents ?? [], viewMode, showGroundVectors, zoom, cameraPan);
-	useRoadRenderer(roadCanvasRef, state?.roads ?? [], viewMode, zoom, cameraPan);
-	usePhysicalObjectRenderer(objectCanvasRef, state?.objects ?? [], viewMode, zoom, cameraPan);
-	useTailLinkRenderer(tailLinkCanvasRef, state?.agents ?? [], viewMode, showTailLinks, zoom, cameraPan);
-	useMoveTargetRenderer(moveTargetCanvasRef, state?.agents ?? [], viewMode, zoom, cameraPan);
-	useWebGPURenderer(canvasRef, state?.agents ?? [], viewMode, zoom, cameraPan);
-	useAgentLabelRenderer(labelCanvasRef, state?.agents ?? [], viewMode, zoom, cameraPan, showCoordinateLabels);
+	useFloorGridRenderer(gridCanvasRef, viewMode, zoom, cameraPan, cameraOrbit);
+	useGroundVectorRenderer(vectorCanvasRef, state?.agents ?? [], viewMode, showGroundVectors, zoom, cameraPan, cameraOrbit);
+	useRoadRenderer(roadCanvasRef, state?.roads ?? [], viewMode, zoom, cameraPan, cameraOrbit);
+	usePhysicalObjectRenderer(objectCanvasRef, state?.objects ?? [], viewMode, zoom, cameraPan, cameraOrbit);
+	useTailLinkRenderer(tailLinkCanvasRef, state?.agents ?? [], viewMode, showTailLinks, zoom, cameraPan, cameraOrbit);
+	useMoveTargetRenderer(moveTargetCanvasRef, state?.agents ?? [], viewMode, zoom, cameraPan, cameraOrbit);
+	useWebGPURenderer(canvasRef, state?.agents ?? [], viewMode, zoom, cameraPan, cameraOrbit);
+	useAgentLabelRenderer(labelCanvasRef, state?.agents ?? [], viewMode, zoom, cameraPan, showCoordinateLabels, cameraOrbit);
 
 	return (
 		<div className="h-screen w-screen overflow-hidden bg-background text-foreground">
@@ -375,8 +382,12 @@ export function App() {
 							if (trackingTarget !== "none") {
 								clearTracking();
 							}
-							dragRef.current = { active: true, x: e.clientX, y: e.clientY };
-							setIsPanning(true);
+							dragRef.current = { active: true, x: e.clientX, y: e.clientY, shift: e.shiftKey };
+							if (e.shiftKey) {
+								setIsOrbiting(true);
+							} else {
+								setIsPanning(true);
+							}
 							e.currentTarget.setPointerCapture(e.pointerId);
 						}}
 						onPointerMove={(e) => {
@@ -387,18 +398,31 @@ export function App() {
 							const dyPx = e.clientY - dragRef.current.y;
 							dragRef.current.x = e.clientX;
 							dragRef.current.y = e.clientY;
-							const dxNdc = (dxPx / width) * 2;
-							const dyNdc = (-dyPx / height) * 2;
-							nudgePan(dxNdc, dyNdc);
+							if (dragRef.current.shift) {
+								// Shift+drag: orbit camera. Horizontal = azimuth, vertical = elevation.
+								const sensitivity = 2.5;
+								const dAzimuth = -(dxPx / width) * Math.PI * sensitivity;
+								const dElevation = (dyPx / height) * Math.PI * sensitivity;
+								setCameraOrbit((prev) => ({
+									azimuth: prev.azimuth + dAzimuth,
+									elevation: Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, prev.elevation + dElevation)),
+								}));
+							} else {
+								const dxNdc = (dxPx / width) * 2;
+								const dyNdc = (-dyPx / height) * 2;
+								nudgePan(dxNdc, dyNdc);
+							}
 						}}
 						onPointerUp={(e) => {
 							dragRef.current.active = false;
 							setIsPanning(false);
+							setIsOrbiting(false);
 							e.currentTarget.releasePointerCapture(e.pointerId);
 						}}
 						onPointerLeave={() => {
 							dragRef.current.active = false;
 							setIsPanning(false);
+							setIsOrbiting(false);
 						}}
 						onKeyDown={(e) => {
 							const step = 0.05;
@@ -420,7 +444,7 @@ export function App() {
 							}
 						}}
 						className="relative h-full w-full overflow-hidden bg-black outline-none"
-						style={{ cursor: isPanning ? "grabbing" : "grab", touchAction: "none" }}
+					style={{ cursor: isOrbiting ? "crosshair" : isPanning ? "grabbing" : "grab", touchAction: "none" }}
 					>
 						<div className="pointer-events-none absolute left-3 top-3 z-50">
 							<span className={`inline-flex items-center gap-1.5 rounded bg-background/80 px-2 py-1 text-xs backdrop-blur-sm ${connected ? "text-green-400" : "text-red-400"}`}>
@@ -592,7 +616,7 @@ export function App() {
 									</span>
 								</div>
 								<p className="text-xs text-muted-foreground">
-									Drag the simulation view or use arrow keys while focused. Manual camera moves stop tracking.
+									Drag to pan. <strong>Shift+drag</strong> to orbit the camera in 3D. Arrow keys pan while focused. Manual camera moves stop tracking.
 								</p>
 								<label className="mt-2 flex items-center gap-2 text-sm text-muted-foreground">
 									<input

@@ -3,6 +3,8 @@ import {
   applyViewTransformToNDC,
   ndcToPixel,
   projectToNDC,
+  projectToNDCOrbit,
+  type CameraOrbit,
   type CameraPan,
   type Vector3,
   type ViewMode,
@@ -21,9 +23,10 @@ function toPixel(
   zoom: number,
   cameraPan: CameraPan,
   width: number,
-  height: number
+  height: number,
+  cameraOrbit?: CameraOrbit
 ): [number, number] {
-  const [nx, ny] = projectToNDC(point, viewMode);
+  const [nx, ny] = cameraOrbit ? projectToNDCOrbit(point, cameraOrbit) : projectToNDC(point, viewMode);
   const [zx, zy] = applyViewTransformToNDC(nx, ny, zoom, cameraPan);
   return ndcToPixel(zx, zy, width, height);
 }
@@ -36,7 +39,8 @@ function worldRoadHalfWidthToPixels(
   zoom: number,
   cameraPan: CameraPan,
   width: number,
-  height: number
+  height: number,
+  cameraOrbit?: CameraOrbit
 ): number {
   const dx = nextPoint.x - point.x;
   const dz = nextPoint.z - point.z;
@@ -55,8 +59,8 @@ function worldRoadHalfWidthToPixels(
     z: point.z + nz * half,
   };
 
-  const [px, py] = toPixel(point, viewMode, zoom, cameraPan, width, height);
-  const [ox, oy] = toPixel(offsetPoint, viewMode, zoom, cameraPan, width, height);
+  const [px, py] = toPixel(point, viewMode, zoom, cameraPan, width, height, cameraOrbit);
+  const [ox, oy] = toPixel(offsetPoint, viewMode, zoom, cameraPan, width, height, cameraOrbit);
   return Math.max(1, Math.hypot(ox - px, oy - py));
 }
 
@@ -109,7 +113,8 @@ export function useRoadRenderer(
   roads: Road[],
   viewMode: ViewMode,
   zoom: number,
-  cameraPan: CameraPan
+  cameraPan: CameraPan,
+  cameraOrbit?: CameraOrbit
 ) {
   useEffect(() => {
     let rafId = 0;
@@ -151,7 +156,8 @@ export function useRoadRenderer(
             zoom,
             cameraPan,
             width,
-            height
+            height,
+            cameraOrbit
           );
           const endThickness = worldRoadHalfWidthToPixels(
             preLast,
@@ -161,12 +167,13 @@ export function useRoadRenderer(
             zoom,
             cameraPan,
             width,
-            height
+            height,
+            cameraOrbit
           );
 
           ctx.beginPath();
           for (let i = 0; i < road.points.length; i++) {
-            const [px, py] = toPixel(road.points[i], viewMode, zoom, cameraPan, width, height);
+            const [px, py] = toPixel(road.points[i], viewMode, zoom, cameraPan, width, height, cameraOrbit);
             if (i === 0) {
               ctx.moveTo(px, py);
             } else {
@@ -186,7 +193,7 @@ export function useRoadRenderer(
           ctx.stroke();
 
           const labelPoint = pointAlongRoad(road.points, 0.22);
-          let [lx, ly] = toPixel(labelPoint, viewMode, zoom, cameraPan, width, height);
+          let [lx, ly] = toPixel(labelPoint, viewMode, zoom, cameraPan, width, height, cameraOrbit);
           const pad = Math.max(18, 20 * dpr);
           lx = Math.max(pad, Math.min(width - pad, lx));
           ly = Math.max(pad, Math.min(height - pad, ly));
@@ -207,5 +214,5 @@ export function useRoadRenderer(
 
     rafId = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(rafId);
-  }, [canvasRef, roads, viewMode, zoom, cameraPan]);
+  }, [canvasRef, roads, viewMode, zoom, cameraPan, cameraOrbit]);
 }

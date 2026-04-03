@@ -4,6 +4,8 @@ import {
   applyViewTransformToNDC,
   ndcToPixel,
   projectToNDC,
+  projectToNDCOrbit,
+  type CameraOrbit,
   type CameraPan,
   type Vector3,
   type ViewMode,
@@ -53,9 +55,10 @@ function projectWorldPoint(
   zoom: number,
   cameraPan: CameraPan,
   width: number,
-  height: number
+  height: number,
+  cameraOrbit?: CameraOrbit
 ): [number, number] {
-  const [ndcX, ndcY] = projectToNDC(point, viewMode);
+  const [ndcX, ndcY] = cameraOrbit ? projectToNDCOrbit(point, cameraOrbit) : projectToNDC(point, viewMode);
   const [zx, zy] = applyViewTransformToNDC(ndcX, ndcY, zoom, cameraPan);
   return ndcToPixel(zx, zy, width, height);
 }
@@ -95,7 +98,8 @@ export function useMoveTargetRenderer(
   agents: Agent[],
   viewMode: ViewMode,
   zoom: number,
-  cameraPan: CameraPan
+  cameraPan: CameraPan,
+  cameraOrbit?: CameraOrbit
 ) {
   useEffect(() => {
     let rafId = 0;
@@ -125,11 +129,13 @@ export function useMoveTargetRenderer(
           if (!agent.moveGoal) continue;
 
           const { full, completed, remaining } = buildDisplayPath(agent);
-          const [gxNdcX, gxNdcY] = projectToNDC(agent.moveGoal, viewMode);
-          const [gFloorNdcX, gFloorNdcY] = projectToNDC(
-            { x: agent.moveGoal.x, y: FLOOR_Y, z: agent.moveGoal.z },
-            viewMode
-          );
+          const [gxNdcX, gxNdcY] = cameraOrbit ? projectToNDCOrbit(agent.moveGoal, cameraOrbit) : projectToNDC(agent.moveGoal, viewMode);
+          const [gFloorNdcX, gFloorNdcY] = cameraOrbit
+            ? projectToNDCOrbit({ x: agent.moveGoal.x, y: FLOOR_Y, z: agent.moveGoal.z }, cameraOrbit)
+            : projectToNDC(
+                { x: agent.moveGoal.x, y: FLOOR_Y, z: agent.moveGoal.z },
+                viewMode
+              );
           const [zgx, zgy] = applyViewTransformToNDC(gxNdcX, gxNdcY, zoom, cameraPan);
           const [zgfx, zgfy] = applyViewTransformToNDC(gFloorNdcX, gFloorNdcY, zoom, cameraPan);
           const [gx, gy] = ndcToPixel(zgx, zgy, width, height);
@@ -144,9 +150,9 @@ export function useMoveTargetRenderer(
           const completedPointColor = alphaColor(baseColor, 0.18);
           const activePointColor = alphaColor(baseColor, 0.96);
 
-          const fullPixels = full.map((point) => projectWorldPoint(point, viewMode, zoom, cameraPan, width, height));
-          const completedPixels = completed.map((point) => projectWorldPoint(point, viewMode, zoom, cameraPan, width, height));
-          const remainingPixels = remaining.map((point) => projectWorldPoint(point, viewMode, zoom, cameraPan, width, height));
+          const fullPixels = full.map((point) => projectWorldPoint(point, viewMode, zoom, cameraPan, width, height, cameraOrbit));
+          const completedPixels = completed.map((point) => projectWorldPoint(point, viewMode, zoom, cameraPan, width, height, cameraOrbit));
+          const remainingPixels = remaining.map((point) => projectWorldPoint(point, viewMode, zoom, cameraPan, width, height, cameraOrbit));
 
           if (completedPixels.length >= 2) {
             ctx.save();
@@ -218,5 +224,5 @@ export function useMoveTargetRenderer(
 
     rafId = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(rafId);
-  }, [canvasRef, agents, viewMode, zoom, cameraPan]);
+  }, [canvasRef, agents, viewMode, zoom, cameraPan, cameraOrbit]);
 }

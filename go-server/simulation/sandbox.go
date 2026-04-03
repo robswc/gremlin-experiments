@@ -16,6 +16,7 @@ type Sandbox struct {
 	Agents      []*Agent               `json:"agents"`
 	Objects     []*PhysicalObject      `json:"objects"`
 	Roads       []*Road                `json:"roads"`
+	Paths       []*Path                `json:"paths"`
 	Fleets      []*Fleet               `json:"fleets"`
 	SpawnPoints map[string]*SpawnPoint `json:"spawnPoints"`
 
@@ -35,6 +36,7 @@ type SandboxState struct {
 	Agents  []*Agent          `json:"agents"`
 	Objects []*PhysicalObject `json:"objects"`
 	Roads   []*Road           `json:"roads"`
+	Paths   []*Path           `json:"paths"`
 	Fleets  []*Fleet          `json:"fleets"`
 }
 
@@ -47,6 +49,7 @@ func NewSandbox(width, height, depth float64) *Sandbox {
 		Agents:      make([]*Agent, 0),
 		Objects:     make([]*PhysicalObject, 0),
 		Roads:       make([]*Road, 0),
+		Paths:       make([]*Path, 0),
 		Fleets:      make([]*Fleet, 0),
 		SpawnPoints: make(map[string]*SpawnPoint),
 		TickRate:    16 * time.Millisecond,
@@ -130,6 +133,17 @@ func (s *Sandbox) AddRoad(r *Road) {
 	s.Roads = append(s.Roads, r)
 }
 
+// AddPath adds a reusable path route to the sandbox.
+func (s *Sandbox) AddPath(p *Path) {
+	if p == nil {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Paths = append(s.Paths, p)
+}
+
 // Subscribe returns a channel that receives state snapshots each tick.
 func (s *Sandbox) Subscribe() chan SandboxState {
 	ch := make(chan SandboxState, 1)
@@ -191,7 +205,14 @@ func (s *Sandbox) Run() {
 				}
 			}
 
-			// 3) Update fleet followers using current target transforms.
+			// 3) Update assigned path followers.
+			for _, a := range s.Agents {
+				if a.Behavior == "path" {
+					a.StepAssignedPath(deltaSeconds)
+				}
+			}
+
+			// 4) Update fleet followers using current target transforms.
 			for _, a := range s.Agents {
 				if a.Behavior == "follow" {
 					target := agentsByID[a.FollowID]
@@ -199,7 +220,7 @@ func (s *Sandbox) Run() {
 				}
 			}
 
-			// 4) Update tailers using (possibly updated) target transforms.
+			// 5) Update tailers using (possibly updated) target transforms.
 			for _, a := range s.Agents {
 				if a.Behavior == "tail" {
 					target := agentsByID[a.FollowID]
@@ -207,14 +228,14 @@ func (s *Sandbox) Run() {
 				}
 			}
 
-			// 5) Any unknown or empty behavior is held stationary.
+			// 6) Any unknown or empty behavior is held stationary.
 			for _, a := range s.Agents {
 				if a.Behavior == "" && a.HasQueuedObjectives() {
 					s.activateNextObjective(a)
 				}
 
 				switch a.Behavior {
-				case "orbit", "follow", "tail", "move_to":
+				case "orbit", "follow", "tail", "move_to", "path":
 					// handled above
 				default:
 					a.HoldStationary()
@@ -231,6 +252,7 @@ func (s *Sandbox) Run() {
 				Agents:  s.Agents,
 				Objects: s.Objects,
 				Roads:   s.Roads,
+				Paths:   s.Paths,
 				Fleets:  s.Fleets,
 			}
 
@@ -641,6 +663,46 @@ func (s *Sandbox) SetAgentBehavior(agentID string, behavior string) error {
 	for _, a := range s.Agents {
 		if a.ID == agentID {
 			a.SetBehavior(behavior)
+			return nil
+		}
+	}
+
+	return fmt.Errorf("agent %q not found", agentID)
+}
+
+// AssignPathToAgent attaches a reusable path to an agent.
+// mode must be "once" or "repeat".
+func (s *Sandbox) AssignPathToAgent(agentID, pathID, mode string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	repeat := false
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "once":
+		repeat = false
+	case "repeat":
+		repeat = true
+	default:
+		return fmt.Errorf("unsupported path mode %q (expected once or repeat)", mode)
+	}
+
+	var targetPath *Path
+	for _, p := range s.Paths {
+		if p.ID == pathID {
+			targetPath = p
+			break
+		}
+	}
+	if targetPath == nil {
+		return fmt.Errorf("path %q not found", pathID)
+	}
+	if len(targetPath.Points) == 0 {
+		return fmt.Errorf("path %q has no points", pathID)
+	}
+
+	for _, a := range s.Agents {
+		if a.ID == agentID {
+			a.AssignPath(targetPath.ID, targetPath.Points, repeat)
 			return nil
 		}
 	}

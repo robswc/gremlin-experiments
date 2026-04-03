@@ -28,6 +28,10 @@ type Agent struct {
 	Behavior        string          `json:"behavior"`
 	MovementMode    string          `json:"movementMode"`
 	FollowID        string          `json:"followId,omitempty"`
+	AssignedPathID  string          `json:"assignedPathId,omitempty"`
+	AssignedPathMode string         `json:"assignedPathMode,omitempty"`
+	AssignedPath    []Vector3       `json:"assignedPath,omitempty"`
+	AssignedPathIndex int           `json:"assignedPathIndex,omitempty"`
 	Position        Vector3         `json:"position"`
 	Orientation     Orientation     `json:"orientation"`
 	Velocity        Vector3         `json:"velocity"`
@@ -241,6 +245,56 @@ func (a *Agent) StepMoveTo(deltaSeconds float64) {
 	a.applyDroneMotion(deltaSeconds)
 }
 
+// StepAssignedPath advances along an assigned reusable path.
+func (a *Agent) StepAssignedPath(deltaSeconds float64) {
+	if len(a.AssignedPath) == 0 {
+		a.finishAssignedPath()
+		return
+	}
+
+	if a.AssignedPathIndex >= len(a.AssignedPath) {
+		if a.AssignedPathMode == "repeat" {
+			a.AssignedPathIndex = 0
+		} else {
+			a.finishAssignedPath()
+			return
+		}
+	}
+
+	goal := a.AssignedPath[a.AssignedPathIndex]
+	dx := goal.X - a.Position.X
+	dy := goal.Y - a.Position.Y
+	dz := goal.Z - a.Position.Z
+	if math.Sqrt(dx*dx+dy*dy+dz*dz) <= a.waypointRadius {
+		a.AssignedPathIndex++
+		if a.AssignedPathIndex >= len(a.AssignedPath) {
+			if a.AssignedPathMode == "repeat" {
+				a.AssignedPathIndex = 0
+			} else {
+				a.finishAssignedPath()
+				return
+			}
+		}
+		goal = a.AssignedPath[a.AssignedPathIndex]
+	}
+
+	dx = goal.X - a.Position.X
+	dy = goal.Y - a.Position.Y
+	dz = goal.Z - a.Position.Z
+	distance := math.Sqrt(dx*dx + dy*dy + dz*dz)
+
+	horizontalDistance := math.Hypot(dx, dz)
+	a.desiredYaw = math.Atan2(dz, dx)
+	a.desiredPitch = clamp(math.Atan2(dy, horizontalDistance), -a.maxPitch, a.maxPitch)
+
+	a.targetSpeed = a.moveSpeed
+	if distance < 0.05 {
+		a.targetSpeed = 0
+	}
+
+	a.applyDroneMotion(deltaSeconds)
+}
+
 // HoldStationary forces immediate rest and keeps the current pose in place.
 func (a *Agent) HoldStationary() {
 	a.stopMotion()
@@ -253,8 +307,43 @@ func (a *Agent) SetMoveCommand(goal Vector3, waypoints []Vector3) {
 	a.MoveGoal = &Vector3{X: goal.X, Y: goal.Y, Z: goal.Z}
 	a.MovePath = cloned
 	a.PathIndex = 0
+	a.AssignedPathID = ""
+	a.AssignedPathMode = ""
+	a.AssignedPath = nil
+	a.AssignedPathIndex = 0
 	a.FollowID = ""
 	a.Behavior = "move_to"
+}
+
+// AssignPath sets path-following behavior for either one pass or repeated traversal.
+func (a *Agent) AssignPath(pathID string, waypoints []Vector3, repeat bool) {
+	cloned := make([]Vector3, len(waypoints))
+	copy(cloned, waypoints)
+
+	mode := "once"
+	if repeat {
+		mode = "repeat"
+	}
+
+	a.AssignedPathID = pathID
+	a.AssignedPathMode = mode
+	a.AssignedPath = cloned
+	a.AssignedPathIndex = 0
+	a.FollowID = ""
+	a.MoveGoal = nil
+	a.MovePath = nil
+	a.PathIndex = 0
+	a.ActiveObjective = nil
+	a.objectiveQueue = nil
+	a.Objectives = nil
+
+	if len(cloned) == 0 {
+		a.Behavior = ""
+		a.stopMotion()
+		return
+	}
+
+	a.Behavior = "path"
 }
 
 // EnqueueObjective appends a prioritized objective into the agent objective heap.
@@ -310,6 +399,10 @@ func (a *Agent) SetBehavior(behavior string) {
 	case "", "stationary":
 		a.Behavior = ""
 		a.FollowID = ""
+		a.AssignedPathID = ""
+		a.AssignedPathMode = ""
+		a.AssignedPath = nil
+		a.AssignedPathIndex = 0
 		a.MoveGoal = nil
 		a.MovePath = nil
 		a.PathIndex = 0
@@ -320,6 +413,10 @@ func (a *Agent) SetBehavior(behavior string) {
 	case "orbit":
 		a.Behavior = "orbit"
 		a.FollowID = ""
+		a.AssignedPathID = ""
+		a.AssignedPathMode = ""
+		a.AssignedPath = nil
+		a.AssignedPathIndex = 0
 		a.MoveGoal = nil
 		a.MovePath = nil
 		a.PathIndex = 0
@@ -343,6 +440,12 @@ func (a *Agent) finishMoveTo() {
 	a.MovePath = nil
 	a.PathIndex = 0
 	a.ActiveObjective = nil
+}
+
+func (a *Agent) finishAssignedPath() {
+	a.stopMotion()
+	a.Behavior = ""
+	a.AssignedPathIndex = 0
 }
 
 func (a *Agent) stopMotion() {
@@ -565,6 +668,10 @@ func (a *Agent) Reset() {
 	a.MoveGoal = nil
 	a.MovePath = nil
 	a.PathIndex = 0
+	a.AssignedPathID = ""
+	a.AssignedPathMode = ""
+	a.AssignedPath = nil
+	a.AssignedPathIndex = 0
 	a.objectiveQueue = nil
 	a.ActiveObjective = nil
 	a.Objectives = nil

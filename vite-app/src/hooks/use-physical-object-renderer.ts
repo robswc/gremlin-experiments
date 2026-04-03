@@ -4,6 +4,8 @@ import {
   applyViewTransformToNDC,
   ndcToPixel,
   projectToNDC,
+  projectToNDCOrbit,
+  type CameraOrbit,
   type CameraPan,
   type Vector3,
   type ViewMode,
@@ -28,8 +30,8 @@ function squareCorners(center: Vector3, size: number, y: number): Vector3[] {
   ];
 }
 
-function toPixel(point: Vector3, viewMode: ViewMode, zoom: number, cameraPan: CameraPan, width: number, height: number): [number, number] {
-  const [nx, ny] = projectToNDC(point, viewMode);
+function toPixel(point: Vector3, viewMode: ViewMode, zoom: number, cameraPan: CameraPan, width: number, height: number, cameraOrbit?: CameraOrbit): [number, number] {
+  const [nx, ny] = cameraOrbit ? projectToNDCOrbit(point, cameraOrbit) : projectToNDC(point, viewMode);
   const [zx, zy] = applyViewTransformToNDC(nx, ny, zoom, cameraPan);
   return ndcToPixel(zx, zy, width, height);
 }
@@ -69,7 +71,8 @@ function drawClippedRing(
   zoom: number,
   cameraPan: CameraPan,
   width: number,
-  height: number
+  height: number,
+  cameraOrbit?: CameraOrbit
 ) {
   if (points.length < 2) return;
   const wrapped = [...points, points[0]];
@@ -81,7 +84,7 @@ function drawClippedRing(
       drawing = false;
       continue;
     }
-    const [px, py] = toPixel(p, viewMode, zoom, cameraPan, width, height);
+    const [px, py] = toPixel(p, viewMode, zoom, cameraPan, width, height, cameraOrbit);
     if (!drawing) {
       ctx.moveTo(px, py);
       drawing = true;
@@ -96,7 +99,8 @@ export function usePhysicalObjectRenderer(
   objects: PhysicalObject[],
   viewMode: ViewMode,
   zoom: number,
-  cameraPan: CameraPan
+  cameraPan: CameraPan,
+  cameraOrbit?: CameraOrbit
 ) {
   useEffect(() => {
     let rafId = 0;
@@ -145,7 +149,7 @@ export function usePhysicalObjectRenderer(
                   y,
                   z: center.z + Math.sin(t) * ringR,
                 };
-                surfacePoints.push(toPixel(point, viewMode, zoom, cameraPan, width, height));
+                surfacePoints.push(toPixel(point, viewMode, zoom, cameraPan, width, height, cameraOrbit));
               }
             }
 
@@ -153,8 +157,8 @@ export function usePhysicalObjectRenderer(
             if (hull.length >= 3) {
               const topPoint: Vector3 = { x: center.x, y: center.y + radius, z: center.z };
               const bottomPoint: Vector3 = { x: center.x, y: yMin, z: center.z };
-              const topPx = toPixel(topPoint, viewMode, zoom, cameraPan, width, height);
-              const bottomPx = toPixel(bottomPoint, viewMode, zoom, cameraPan, width, height);
+              const topPx = toPixel(topPoint, viewMode, zoom, cameraPan, width, height, cameraOrbit);
+              const bottomPx = toPixel(bottomPoint, viewMode, zoom, cameraPan, width, height, cameraOrbit);
 
               ctx.beginPath();
               ctx.moveTo(hull[0][0], hull[0][1]);
@@ -186,8 +190,8 @@ export function usePhysicalObjectRenderer(
             const peak = { x: center.x, y: center.y + radius, z: center.z };
             const floorPoint = { x: center.x, y: FLOOR_Y, z: center.z };
             if (peak.y > FLOOR_Y) {
-              const [x1, y1] = toPixel(peak, viewMode, zoom, cameraPan, width, height);
-              const [x2, y2] = toPixel(floorPoint, viewMode, zoom, cameraPan, width, height);
+              const [x1, y1] = toPixel(peak, viewMode, zoom, cameraPan, width, height, cameraOrbit);
+              const [x2, y2] = toPixel(floorPoint, viewMode, zoom, cameraPan, width, height, cameraOrbit);
               ctx.beginPath();
               ctx.moveTo(x1, y1);
               ctx.lineTo(x2, y2);
@@ -205,7 +209,7 @@ export function usePhysicalObjectRenderer(
                 z: center.z + Math.sin(t) * radius,
               });
             }
-            drawClippedRing(ctx, xAxisRing, viewMode, zoom, cameraPan, width, height);
+            drawClippedRing(ctx, xAxisRing, viewMode, zoom, cameraPan, width, height, cameraOrbit);
 
             // Z-axis perimeter ring: circle in XY plane (z fixed at center.z).
             const zAxisRing: Vector3[] = [];
@@ -217,7 +221,7 @@ export function usePhysicalObjectRenderer(
                 z: center.z,
               });
             }
-            drawClippedRing(ctx, zAxisRing, viewMode, zoom, cameraPan, width, height);
+            drawClippedRing(ctx, zAxisRing, viewMode, zoom, cameraPan, width, height, cameraOrbit);
 
             // Floor intersection ring: circle where the sphere crosses y=0.
             const floorDy = FLOOR_Y - center.y;
@@ -232,7 +236,7 @@ export function usePhysicalObjectRenderer(
                   z: center.z + Math.sin(t) * floorRingRadius,
                 });
               }
-              drawClippedRing(ctx, floorRing, viewMode, zoom, cameraPan, width, height);
+              drawClippedRing(ctx, floorRing, viewMode, zoom, cameraPan, width, height, cameraOrbit);
             }
 
             ctx.stroke();
@@ -247,13 +251,13 @@ export function usePhysicalObjectRenderer(
           const topCorners = squareCorners(obj.position, obj.size, obj.position.y + halfH);
 
           const bottomPoints = bottomCorners.map((corner) => {
-            const [nx, ny] = projectToNDC(corner, viewMode);
+            const [nx, ny] = cameraOrbit ? projectToNDCOrbit(corner, cameraOrbit) : projectToNDC(corner, viewMode);
             const [zx, zy] = applyViewTransformToNDC(nx, ny, zoom, cameraPan);
             return ndcToPixel(zx, zy, width, height);
           });
 
           const topPoints = topCorners.map((corner) => {
-            const [nx, ny] = projectToNDC(corner, viewMode);
+            const [nx, ny] = cameraOrbit ? projectToNDCOrbit(corner, cameraOrbit) : projectToNDC(corner, viewMode);
             const [zx, zy] = applyViewTransformToNDC(nx, ny, zoom, cameraPan);
             return ndcToPixel(zx, zy, width, height);
           });
@@ -296,5 +300,5 @@ export function usePhysicalObjectRenderer(
 
     rafId = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(rafId);
-  }, [canvasRef, objects, viewMode, zoom, cameraPan]);
+  }, [canvasRef, objects, viewMode, zoom, cameraPan, cameraOrbit]);
 }

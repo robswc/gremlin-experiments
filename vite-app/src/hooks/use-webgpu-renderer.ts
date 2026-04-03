@@ -3,7 +3,10 @@ import {
   applyViewTransformToNDC,
   ndcToPixel,
   projectDirectionToNDC,
+  projectDirectionToNDCOrbit,
   projectToNDC,
+  projectToNDCOrbit,
+  type CameraOrbit,
   type CameraPan,
   type Orientation,
   type Vector3,
@@ -63,7 +66,8 @@ export function useWebGPURenderer(
   agents: Agent[],
   viewMode: ViewMode,
   zoom: number,
-  cameraPan: CameraPan
+  cameraPan: CameraPan,
+  cameraOrbit?: CameraOrbit
 ) {
   const gpuRef = useRef<{
     device: GPUDevice;
@@ -86,7 +90,8 @@ export function useWebGPURenderer(
     canvas: HTMLCanvasElement,
     currentAgents: Agent[],
     currentViewMode: ViewMode,
-    currentCameraPan: CameraPan
+    currentCameraPan: CameraPan,
+    currentCameraOrbit?: CameraOrbit
   ) => {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
@@ -99,15 +104,12 @@ export function useWebGPURenderer(
     ctx.clearRect(0, 0, width, height);
 
     for (const agent of currentAgents) {
-      const [nx, ny] = projectToNDC(agent.position, currentViewMode);
+      const [nx, ny] = currentCameraOrbit ? projectToNDCOrbit(agent.position, currentCameraOrbit) : projectToNDC(agent.position, currentViewMode);
       const [znx, zny] = applyViewTransformToNDC(nx, ny, zoom, currentCameraPan);
       const [px, py] = ndcToPixel(znx, zny, width, height);
-      const [dx, dy] = projectDirectionToNDC(
-        agent.position,
-        agent.orientation,
-        currentViewMode,
-        2
-      );
+      const [dx, dy] = currentCameraOrbit
+        ? projectDirectionToNDCOrbit(agent.position, agent.orientation, currentCameraOrbit, 2)
+        : projectDirectionToNDC(agent.position, agent.orientation, currentViewMode, 2);
 
       const perpX = -dy;
       const perpY = dx;
@@ -233,7 +235,7 @@ export function useWebGPURenderer(
       const currentAgents = agentsRef.current;
 
       if (canvas && !gpu) {
-        render2DFallback(canvas, currentAgents, viewMode, cameraPan);
+        render2DFallback(canvas, currentAgents, viewMode, cameraPan, cameraOrbit);
       }
 
       if (gpu && canvas) {
@@ -252,14 +254,11 @@ export function useWebGPURenderer(
           const colorData = new Float32Array(currentAgents.length * 4);
 
           for (let i = 0; i < currentAgents.length; i++) {
-            const [nx, ny] = projectToNDC(currentAgents[i].position, viewMode);
+            const [nx, ny] = cameraOrbit ? projectToNDCOrbit(currentAgents[i].position, cameraOrbit) : projectToNDC(currentAgents[i].position, viewMode);
             const [znx, zny] = applyViewTransformToNDC(nx, ny, zoom, cameraPan);
-            const [dx, dy] = projectDirectionToNDC(
-              currentAgents[i].position,
-              currentAgents[i].orientation,
-              viewMode,
-              2
-            );
+            const [dx, dy] = cameraOrbit
+              ? projectDirectionToNDCOrbit(currentAgents[i].position, currentAgents[i].orientation, cameraOrbit, 2)
+              : projectDirectionToNDC(currentAgents[i].position, currentAgents[i].orientation, viewMode, 2);
 
             posData[i * 4 + 0] = znx;
             posData[i * 4 + 1] = zny;
@@ -321,5 +320,5 @@ export function useWebGPURenderer(
 
     rafId = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(rafId);
-  }, [canvasRef, viewMode, zoom, cameraPan]);
+  }, [canvasRef, viewMode, zoom, cameraPan, cameraOrbit]);
 }

@@ -30,34 +30,41 @@ func main() {
 	sandbox.AddObject(simulation.NewSquareObject("square-1", simulation.Vector3{X: 32, Y: 16, Z: 32}, 32))
 	sandbox.AddObject(simulation.NewSphereNoGoZone("no-go-aa-1", simulation.Vector3{X: -32, Y: 0, Z: -32}, 18))
 	sandbox.AddObject(simulation.NewSphereNoGoZone("no-go-aa-2", simulation.Vector3{X: -64, Y: 0, Z: 32}, 18))
+	roadPoints := []simulation.Vector3{
+		{X: -256, Y: 0, Z: 64},
+		{X: -128, Y: 0, Z: 64},
+		{X: 0, Y: 0, Z: 64},
+		{X: 128, Y: 0, Z: 64},
+		{X: 256, Y: 0, Z: 64},
+		{X: 288, Y: 0, Z: 48},
+		{X: 312, Y: 0, Z: 24},
+		{X: 320, Y: 0, Z: 0},
+		{X: 312, Y: 0, Z: -24},
+		{X: 288, Y: 0, Z: -48},
+		{X: 256, Y: 0, Z: -64},
+		{X: 128, Y: 0, Z: -64},
+		{X: 0, Y: 0, Z: -64},
+		{X: -128, Y: 0, Z: -64},
+		{X: -256, Y: 0, Z: -64},
+		{X: -288, Y: 0, Z: -48},
+		{X: -312, Y: 0, Z: -24},
+		{X: -320, Y: 0, Z: 0},
+		{X: -312, Y: 0, Z: 24},
+		{X: -288, Y: 0, Z: 48},
+		{X: -256, Y: 0, Z: 64},
+	}
 	sandbox.AddRoad(simulation.NewRoad(
 		"road-gold-rd",
 		"Gold Rd.",
 		10,
-		[]simulation.Vector3{
-			{X: -256, Y: 0, Z: 64},
-			{X: -128, Y: 0, Z: 64},
-			{X: 0, Y: 0, Z: 64},
-			{X: 128, Y: 0, Z: 64},
-			{X: 256, Y: 0, Z: 64},
-			{X: 288, Y: 0, Z: 48},
-			{X: 312, Y: 0, Z: 24},
-			{X: 320, Y: 0, Z: 0},
-			{X: 312, Y: 0, Z: -24},
-			{X: 288, Y: 0, Z: -48},
-			{X: 256, Y: 0, Z: -64},
-			{X: 128, Y: 0, Z: -64},
-			{X: 0, Y: 0, Z: -64},
-			{X: -128, Y: 0, Z: -64},
-			{X: -256, Y: 0, Z: -64},
-			{X: -288, Y: 0, Z: -48},
-			{X: -312, Y: 0, Z: -24},
-			{X: -320, Y: 0, Z: 0},
-			{X: -312, Y: 0, Z: 24},
-			{X: -288, Y: 0, Z: 48},
-			{X: -256, Y: 0, Z: 64},
-		},
+		roadPoints,
 	))
+
+	airRoadPoints := make([]simulation.Vector3, len(roadPoints))
+	for i, p := range roadPoints {
+		airRoadPoints[i] = simulation.Vector3{X: p.X, Y: 10, Z: p.Z}
+	}
+	sandbox.AddPath(simulation.NewPath("path-air-gold-rd", "Air Gold Rd.", airRoadPoints))
 
 	// Start simulation in background
 	go sandbox.Run()
@@ -223,6 +230,64 @@ func main() {
 			"ok":       true,
 			"id":       req.ID,
 			"behavior": strings.ToLower(req.Behavior),
+		})
+	})
+
+	// Assign a predefined path to an agent.
+	http.HandleFunc("/agent-path", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		if r.Method == http.MethodOptions {
+			w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		type agentPathRequest struct {
+			ID     string `json:"id"`
+			PathID string `json:"pathId"`
+			Mode   string `json:"mode"`
+		}
+
+		var req agentPathRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		req.ID = strings.TrimSpace(req.ID)
+		req.PathID = strings.TrimSpace(req.PathID)
+		req.Mode = strings.ToLower(strings.TrimSpace(req.Mode))
+		if req.ID == "" {
+			http.Error(w, "id is required", http.StatusBadRequest)
+			return
+		}
+		if req.PathID == "" {
+			http.Error(w, "pathId is required", http.StatusBadRequest)
+			return
+		}
+		if req.Mode == "" {
+			req.Mode = "once"
+		}
+
+		if err := sandbox.AssignPathToAgent(req.ID, req.PathID, req.Mode); err != nil {
+			status := http.StatusBadRequest
+			if strings.Contains(err.Error(), "not found") {
+				status = http.StatusNotFound
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":     true,
+			"id":     req.ID,
+			"pathId": req.PathID,
+			"mode":   req.Mode,
 		})
 	})
 

@@ -3,6 +3,8 @@ import {
   applyViewTransformToNDC,
   ndcToPixel,
   projectToNDC,
+  projectToNDCOrbit,
+  type CameraOrbit,
   type CameraPan,
   type Vector3,
   type ViewMode,
@@ -19,7 +21,8 @@ export function useAgentLabelRenderer(
   viewMode: ViewMode,
   zoom: number,
   cameraPan: CameraPan,
-  showCoordinateLabels: boolean
+  showCoordinateLabels: boolean,
+  cameraOrbit?: CameraOrbit
 ) {
   useEffect(() => {
     let rafId = 0;
@@ -65,7 +68,7 @@ export function useAgentLabelRenderer(
           const boxY = margin + i * (rowHeight + 6 * dpr);
           const boxMidY = boxY + boxHeight / 2;
 
-          const [axNdcX, axNdcY] = projectToNDC(agent.position, viewMode);
+          const [axNdcX, axNdcY] = cameraOrbit ? projectToNDCOrbit(agent.position, cameraOrbit) : projectToNDC(agent.position, viewMode);
           const [zax, zay] = applyViewTransformToNDC(axNdcX, axNdcY, zoom, cameraPan);
           const [ax, ay] = ndcToPixel(zax, zay, width, height);
 
@@ -121,5 +124,5 @@ export function useAgentLabelRenderer(
 
     rafId = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(rafId);
-  }, [canvasRef, agents, viewMode, zoom, cameraPan, showCoordinateLabels]);
+  }, [canvasRef, agents, viewMode, zoom, cameraPan, showCoordinateLabels, cameraOrbit]);
 }

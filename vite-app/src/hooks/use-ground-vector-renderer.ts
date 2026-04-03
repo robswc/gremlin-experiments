@@ -4,8 +4,12 @@ import {
   applyViewTransformToNDC,
   ndcToPixel,
   projectFloorToNDC,
+  projectFloorToNDCOrbit,
   projectToNDC,
+  projectToNDCOrbit,
   projectToNDCClampedToFloor,
+  projectToNDCClampedToFloorOrbit,
+  type CameraOrbit,
   type CameraPan,
   type Vector3,
   type ViewMode,
@@ -24,7 +28,8 @@ export function useGroundVectorRenderer(
   viewMode: ViewMode,
   enabled: boolean,
   zoom: number,
-  cameraPan: CameraPan
+  cameraPan: CameraPan,
+  cameraOrbit?: CameraOrbit
 ) {
   useEffect(() => {
     let rafId = 0;
@@ -51,6 +56,16 @@ export function useGroundVectorRenderer(
         if (enabled) {
           ctx.lineWidth = Math.max(1, 1.4 * devicePixelRatio);
 
+          const project = cameraOrbit
+            ? (pos: { x: number; y: number; z: number }) => projectToNDCOrbit(pos, cameraOrbit)
+            : (pos: { x: number; y: number; z: number }) => projectToNDC(pos, viewMode);
+          const projectFloor = cameraOrbit
+            ? (x: number, z: number) => projectFloorToNDCOrbit(x, z, cameraOrbit)
+            : (x: number, z: number) => projectFloorToNDC(x, z, viewMode);
+          const projectClamped = cameraOrbit
+            ? (pos: { x: number; y: number; z: number }) => projectToNDCClampedToFloorOrbit(pos, cameraOrbit)
+            : (pos: { x: number; y: number; z: number }) => projectToNDCClampedToFloor(pos, viewMode);
+
           for (const agent of agents) {
             const color = agent.friendly
               ? "rgba(0, 255, 255, 0.6)"
@@ -58,12 +73,12 @@ export function useGroundVectorRenderer(
                 ? "rgba(255, 64, 64, 0.6)"
                 : "rgba(255, 255, 255, 0.42)";
             ctx.strokeStyle = color;
-            const [nx1, ny1] = projectToNDC(agent.position, viewMode);
-            const [nx2, ny2] = projectFloorToNDC(agent.position.x, agent.position.z, viewMode);
+            const [nx1, ny1] = project(agent.position);
+            const [nx2, ny2] = projectFloor(agent.position.x, agent.position.z);
 
             // If point projection collapses to floor in some camera/view combinations,
             // keep a fallback using floor-clamped projection to avoid disappearing lines.
-            const [fx1, fy1] = projectToNDCClampedToFloor(agent.position, viewMode);
+            const [fx1, fy1] = projectClamped(agent.position);
             const startNx = Number.isFinite(nx1) ? nx1 : fx1;
             const startNy = Number.isFinite(ny1) ? ny1 : fy1;
             const [zx1, zy1] = applyViewTransformToNDC(startNx, startNy, zoom, cameraPan);
@@ -100,5 +115,5 @@ export function useGroundVectorRenderer(
 
     rafId = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(rafId);
-  }, [canvasRef, agents, viewMode, enabled, zoom, cameraPan]);
+  }, [canvasRef, agents, viewMode, enabled, zoom, cameraPan, cameraOrbit]);
 }

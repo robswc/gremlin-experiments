@@ -3,7 +3,10 @@ import {
   WORLD_HALF_EXTENT,
   applyViewTransformToNDC,
   projectFloorToNDC,
+  projectFloorToNDCOrbit,
+  unprojectFloorFromNDCOrbit,
   ndcToPixel,
+  type CameraOrbit,
   type CameraPan,
   type ViewMode,
 } from "@/lib/projection";
@@ -31,7 +34,6 @@ function unprojectFloorFromNDC(
       const z = (sum - diff) * 0.5;
       return [x, z];
     }
-    // Front/side floor projection collapses one floor axis, so a complete inverse is undefined.
     default:
       return null;
   }
@@ -40,7 +42,8 @@ function unprojectFloorFromNDC(
 function getDynamicGridBounds(
   viewMode: ViewMode,
   zoom: number,
-  cameraPan: CameraPan
+  cameraPan: CameraPan,
+  cameraOrbit?: CameraOrbit
 ): { minX: number; maxX: number; minZ: number; maxZ: number; step: number } {
   const safeZoom = Math.max(0.0001, zoom);
   const minNX = (-1 - cameraPan.x) / safeZoom;
@@ -55,9 +58,13 @@ function getDynamicGridBounds(
     [maxNX, maxNY],
   ];
 
-  const worldPoints = corners
-    .map(([nx, ny]) => unprojectFloorFromNDC(nx, ny, viewMode))
-    .filter((point): point is [number, number] => point !== null);
+  const worldPoints = cameraOrbit
+    ? corners
+        .map(([nx, ny]) => unprojectFloorFromNDCOrbit(nx, ny, cameraOrbit))
+        .filter((point): point is [number, number] => point !== null)
+    : corners
+        .map(([nx, ny]) => unprojectFloorFromNDC(nx, ny, viewMode))
+        .filter((point): point is [number, number] => point !== null);
 
   let minX = -BASE_GRID_HALF_EXTENT;
   let maxX = BASE_GRID_HALF_EXTENT;
@@ -86,7 +93,8 @@ function drawFloorGrid(
   height: number,
   viewMode: ViewMode,
   zoom: number,
-  cameraPan: CameraPan
+  cameraPan: CameraPan,
+  cameraOrbit?: CameraOrbit
 ) {
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, width, height);
@@ -94,8 +102,13 @@ function drawFloorGrid(
   const { minX, maxX, minZ, maxZ, step } = getDynamicGridBounds(
     viewMode,
     zoom,
-    cameraPan
+    cameraPan,
+    cameraOrbit
   );
+
+  const projectFloor = cameraOrbit
+    ? (x: number, z: number): [number, number] => projectFloorToNDCOrbit(x, z, cameraOrbit)
+    : (x: number, z: number): [number, number] => projectFloorToNDC(x, z, viewMode);
 
   const drawGridLine = (
     a: [number, number],
@@ -117,15 +130,15 @@ function drawFloorGrid(
 
   // Grid lines parallel to Z axis (vary Z, fixed X)
   for (let x = minX; x <= maxX; x += step) {
-    const a = projectFloorToNDC(x, minZ, viewMode);
-    const b = projectFloorToNDC(x, maxZ, viewMode);
+    const a = projectFloor(x, minZ);
+    const b = projectFloor(x, maxZ);
     drawGridLine(a, b, x % MAJOR_INTERVAL === 0);
   }
 
   // Grid lines parallel to X axis (vary X, fixed Z)
   for (let z = minZ; z <= maxZ; z += step) {
-    const a = projectFloorToNDC(minX, z, viewMode);
-    const b = projectFloorToNDC(maxX, z, viewMode);
+    const a = projectFloor(minX, z);
+    const b = projectFloor(maxX, z);
     drawGridLine(a, b, z % MAJOR_INTERVAL === 0);
   }
 }
@@ -134,7 +147,8 @@ export function useFloorGridRenderer(
   canvasRef: React.RefObject<HTMLCanvasElement | null>,
   viewMode: ViewMode,
   zoom: number,
-  cameraPan: CameraPan
+  cameraPan: CameraPan,
+  cameraOrbit?: CameraOrbit
 ) {
   useEffect(() => {
     let rafId = 0;
@@ -155,7 +169,7 @@ export function useFloorGridRenderer(
       const width = canvas.width;
       const height = canvas.height;
       if (width > 0 && height > 0) {
-        drawFloorGrid(ctx, width, height, viewMode, zoom, cameraPan);
+        drawFloorGrid(ctx, width, height, viewMode, zoom, cameraPan, cameraOrbit);
       }
 
       rafId = requestAnimationFrame(frame);
@@ -163,5 +177,5 @@ export function useFloorGridRenderer(
 
     rafId = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(rafId);
-  }, [canvasRef, viewMode, zoom, cameraPan]);
+  }, [canvasRef, viewMode, zoom, cameraPan, cameraOrbit]);
 }
